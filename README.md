@@ -1,0 +1,252 @@
+# Rayview Meta
+
+Rayview Meta is a desktop-first literature screening tool for systematic reviews and meta-analysis workflows. The project contains a Windows desktop client and a standalone Rust HTTP server. The client handles PDF import, PubMed import, screening decisions, labels, notes, bilingual abstract review, and export. The server stores project-scoped literature libraries and coordinates multi-user edits.
+
+The default client endpoint is local development:
+
+```text
+http://127.0.0.1:9631
+```
+
+Set a different server URL in the client settings page or with `RAYVIEW_SERVER_URL` when launching the client.
+
+## Features
+
+- Project management from the top bar: create, select, and delete independent literature libraries.
+- PDF ingestion with title, abstract, and DOI extraction heuristics.
+- PubMed batch import from PMID values or PubMed URLs.
+- Manual record creation.
+- Duplicate rejection inside the same project when either normalized title or DOI already exists.
+- Rayyan-style screening decisions: undecided, include, exclude, and maybe.
+- Tags, starred records, exclusion reasons, notes, and keyword highlighting.
+- Detail view with side-by-side English abstract and Chinese translation.
+- Network translation through the free MyMemory translation API; no in-repo translation model is shipped.
+- Field-level optimistic concurrency for multi-user editing.
+- Export of included records to real `.xlsx` files.
+- Single-file Windows GUI client build with no console window.
+
+## Repository Layout
+
+```text
+RayViewMeta/
+├── Cargo.toml          # Desktop client crate
+├── src/                # Client source
+│   ├── images/         # Client icon and top-bar logo assets
+│   └── ui/             # egui screens
+├── shared/             # Client-side shared protocol types
+├── server/             # Standalone server project
+│   ├── Cargo.toml
+│   ├── src/
+│   └── shared/         # Server-local copy of shared protocol types
+├── dist/               # Local client release output, ignored by Git
+└── server/dist/        # Local server release output, ignored by Git
+```
+
+Private deployment notes, SSH keys, host names, and upload commands should stay outside tracked files. A local `.deploy/` folder is ignored for that purpose.
+
+## Requirements
+
+- Rust stable.
+- Windows for building and running the desktop client as a native `.exe`.
+- Linux or Ubuntu for typical server deployment.
+- Network access from the client for PubMed import and MyMemory translation.
+
+## Run The Server Locally
+
+```powershell
+Push-Location server
+cargo run --release
+Pop-Location
+```
+
+The server listens on `0.0.0.0:9631` by default. Override it with environment variables:
+
+```powershell
+$env:RAYVIEW_HOST = "127.0.0.1"
+$env:RAYVIEW_PORT = "9631"
+$env:RAYVIEW_DATA = "./rayview_data.json"
+Push-Location server
+cargo run --release
+Pop-Location
+```
+
+The data file is JSON. Older single-library data files stored as `Vec<Article>` are migrated in memory into the default project and are written back in the new project-based format on the next change.
+
+## Run The Client
+
+```powershell
+cargo run --release
+```
+
+To point the client at a non-default server for one session:
+
+```powershell
+$env:RAYVIEW_SERVER_URL = "http://127.0.0.1:9631"
+cargo run --release
+```
+
+You can also change the endpoint inside the Settings view. After changing the server URL, the client reloads projects first and then loads the selected project library.
+
+## Build The Windows Client
+
+```powershell
+cargo build --release
+Remove-Item dist -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path dist | Out-Null
+Copy-Item target\release\rayview-client.exe dist\RayviewMeta.exe -Force
+```
+
+The output is:
+
+```text
+dist\RayviewMeta.exe
+```
+
+The client is built as a Windows GUI subsystem executable, so double-clicking it does not open a console window. The app icon is loaded from `src/images/icon.png` and upscaled at runtime when needed. The top-bar logo is loaded from `src/images/logo.png`.
+
+## Build A Linux Server Binary
+
+For a portable Linux build from Windows, use the musl target:
+
+```powershell
+rustup target add x86_64-unknown-linux-musl
+$env:CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER = "rust-lld"
+Push-Location server
+cargo build --release --target x86_64-unknown-linux-musl
+Pop-Location
+Remove-Item Env:\CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER -ErrorAction SilentlyContinue
+```
+
+Package it as a tarball:
+
+```powershell
+$package = "rayview-meta-server-ubuntu-x86_64-musl"
+$packageDir = Join-Path "server\dist" $package
+$archive = "server\dist\${package}.tar.gz"
+Remove-Item $packageDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+Copy-Item "server\target\x86_64-unknown-linux-musl\release\rayview-meta-server" (Join-Path $packageDir "rayview-meta-server") -Force
+Remove-Item $archive -Force -ErrorAction SilentlyContinue
+tar -czf $archive -C "server\dist" $package
+Get-FileHash $archive -Algorithm SHA256
+```
+
+Deploy the resulting binary or archive with your own SSH credentials and service layout. Do not commit real host names, IP addresses, SSH keys, or private deployment commands.
+
+## systemd Example
+
+This is a generic unit template. Adjust `User`, `WorkingDirectory`, `ExecStart`, and `RAYVIEW_DATA` for your server.
+
+```ini
+[Unit]
+Description=Rayview Meta Server
+After=network.target
+
+[Service]
+Type=simple
+User=rayview
+WorkingDirectory=/opt/<your-app-dir>
+ExecStart=/opt/<your-app-dir>/rayview-meta-server
+Environment=RAYVIEW_HOST=0.0.0.0
+Environment=RAYVIEW_PORT=9631
+Environment=RAYVIEW_DATA=/opt/<your-app-dir>/data/rayview_data.json
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## API Overview
+
+Project endpoints:
+
+```text
+GET    /api/projects
+POST   /api/projects
+DELETE /api/projects/:project_id
+```
+
+Project-scoped article endpoints:
+
+```text
+GET    /api/projects/:project_id/articles
+POST   /api/projects/:project_id/articles
+POST   /api/projects/:project_id/articles/bulk
+GET    /api/projects/:project_id/articles/:id
+PATCH  /api/projects/:project_id/articles/:id
+DELETE /api/projects/:project_id/articles/:id
+```
+
+Compatibility endpoints still target the default project:
+
+```text
+GET    /api/articles
+POST   /api/articles
+POST   /api/articles/bulk
+GET    /api/articles/:id
+PATCH  /api/articles/:id
+DELETE /api/articles/:id
+```
+
+Health check:
+
+```text
+GET /api/health
+```
+
+## Concurrency Model
+
+Each article has an overall version plus per-field versions for tags, starred state, exclusion reason, decision, and notes. Updates include the version the client last saw. The server accepts non-overlapping field edits from different clients and returns a conflict only when the same field changed after the client's expected version.
+
+## Duplicate Handling
+
+Duplicate checks are project-scoped. A new article is rejected with HTTP `409` and the message `文献重复` when either condition is true:
+
+- Its normalized title matches an existing article title in the same project.
+- Its DOI matches an existing DOI in the same project, ignoring case and trailing periods.
+
+The client imports records one by one so a duplicate no longer blocks unrelated records in the same batch.
+
+## Translation
+
+The detail view automatically starts a network translation task for the selected article abstract. The English source text remains the source of keyword detection. Highlight terms are also translated and applied to the Chinese column when the translation service returns usable keyword translations.
+
+The translation integration uses MyMemory's public API:
+
+```text
+https://api.mymemory.translated.net/get
+```
+
+Production users should review the service's usage limits and privacy terms before sending sensitive text.
+
+## Development Checks
+
+Client:
+
+```powershell
+cargo fmt
+cargo test --quiet
+cargo check
+cargo clippy --all-targets -- -D warnings
+cargo build --release
+```
+
+Server:
+
+```powershell
+Push-Location server
+cargo fmt
+cargo test --quiet
+cargo check
+cargo clippy --all-targets -- -D warnings
+Pop-Location
+```
+
+## AI Usage Disclosure
+
+Parts of this project were designed, implemented, debugged, and documented with assistance from GitHub Copilot. All generated changes are reviewed and maintained as normal project code; responsibility for correctness, security, licensing, and release decisions remains with the project maintainers.
+
+## License
+
+Rayview Meta is licensed under the MIT License.
