@@ -86,8 +86,16 @@ pub fn fetch_article_from_doi_with_fallback(
 fn fetch_metadata_from_clean_doi(doi: &str) -> Result<ArticleMetadata> {
     let client = build_client()?;
     let url = format!("https://doi.org/{doi}");
-    let html =
-        fetch_html(&client, &url).with_context(|| format!("无法通过 DOI 访问期刊网页: {doi}"))?;
+    let html = match fetch_html(&client, &url) {
+        Ok(html) => html,
+        Err(page_error) => {
+            return fetch_crossref(&client, doi).with_context(|| {
+                format!(
+                    "无法通过 DOI 访问期刊网页: {doi}: {page_error}; Crossref 也未返回可用元数据"
+                )
+            });
+        }
+    };
     let mut metadata = parse_article_page(&html.body);
     if let Some(page_doi) = metadata.doi.as_deref().and_then(clean_doi) {
         if page_doi != doi {

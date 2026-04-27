@@ -6,23 +6,34 @@ use shared::{ArticleSource, NewArticle};
 
 /// 从 PDF 文本层中只识别 DOI，再通过 DOI 跳转到期刊页面提取元数据。
 pub fn extract_from_pdf(path: &Path) -> Result<NewArticle> {
-    let text = extract_text_from_pdf(path)?;
-    let doi = extract_doi_from_text(&text)?;
-    match article_from_pdf_text(&text, &doi) {
+    let bytes = read_pdf_bytes(path)?;
+    let text = extract_text_from_pdf_bytes(&bytes)?;
+    extract_from_pdf_text(&text)
+}
+
+fn read_pdf_bytes(path: &Path) -> Result<Vec<u8>> {
+    let bytes = std::fs::read(path)?;
+    if !bytes.starts_with(b"%PDF") {
+        return Err(anyhow!("文件不是有效 PDF，已拒绝导入"));
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+fn extract_text_from_pdf(path: &Path) -> Result<String> {
+    let bytes = read_pdf_bytes(path)?;
+    extract_text_from_pdf_bytes(&bytes)
+}
+
+fn extract_from_pdf_text(text: &str) -> Result<NewArticle> {
+    let doi = extract_doi_from_text(text)?;
+    match article_from_pdf_text(text, &doi) {
         Ok(fallback) => {
             crate::doi::fetch_article_from_doi_with_fallback(&doi, ArticleSource::Pdf, fallback)
         }
         Err(fallback_error) => crate::doi::fetch_article_from_doi(&doi, ArticleSource::Pdf)
             .map_err(|error| anyhow!("{error}; PDF 文本兜底失败: {fallback_error}")),
     }
-}
-
-fn extract_text_from_pdf(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path)?;
-    if !bytes.starts_with(b"%PDF") {
-        return Err(anyhow!("文件不是有效 PDF，已拒绝导入"));
-    }
-    extract_text_from_pdf_bytes(&bytes)
 }
 
 fn extract_doi_from_text(text: &str) -> Result<String> {
@@ -331,16 +342,16 @@ mod tests {
     }
 
     #[test]
-    fn parser_panic_pdf_returns_error_instead_of_unwinding() {
+    fn expert_encoding_pdfs_extract_text_without_unwinding() {
         let path = std::path::Path::new("test/chen2020.pdf");
         if !path.exists() {
             return;
         }
         let bytes = std::fs::read(path).unwrap();
 
-        let error = extract_text_from_pdf_bytes(&bytes).unwrap_err().to_string();
+        let text = extract_text_from_pdf_bytes(&bytes).unwrap();
 
-        assert!(error.contains("PDF 解析失败"));
+        assert!(text.contains("10.1126/sciadv.aba7406"));
     }
 
     #[test]
@@ -400,5 +411,32 @@ mod tests {
             assert!(article.title.contains(title_part));
             assert!(article.abstract_text.contains(abstract_part));
         }
+    }
+
+    #[test]
+    #[ignore = "requires network access and local test PDF fixtures"]
+    fn imports_all_test_pdfs_with_network() {
+        let dir = std::path::Path::new("test");
+        if !dir.exists() {
+            return;
+        }
+
+        let mut tested = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("pdf") {
+                continue;
+            }
+            tested += 1;
+
+            let article = extract_from_pdf(&path)
+                .unwrap_or_else(|error| panic!("{} failed: {error}", path.display()));
+
+            assert!(!article.title.trim().is_empty());
+            assert!(!article.abstract_text.trim().is_empty());
+            assert!(article.doi.is_some());
+        }
+
+        assert!(tested > 0);
     }
 }

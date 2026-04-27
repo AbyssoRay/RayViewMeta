@@ -29,6 +29,14 @@ pub struct DeleteManyReport {
     pub failures: Vec<FailureReport>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ImportProgress {
+    pub current: usize,
+    pub total: usize,
+    pub item: String,
+    pub message: String,
+}
+
 /// 异步任务结果。客户端 UI 通过轮询 receiver 获取后台线程的产出。
 pub enum TaskMsg {
     ProjectsRefreshed(anyhow::Result<Vec<Project>>),
@@ -37,6 +45,20 @@ pub enum TaskMsg {
     ProjectDeleted(anyhow::Result<String>),
     Refreshed(anyhow::Result<Vec<Article>>),
     Imported(anyhow::Result<Vec<Article>>),
+    ImportProgress {
+        project_id: String,
+        progress: ImportProgress,
+    },
+    ImportedOne {
+        project_id: String,
+        result: anyhow::Result<Box<Article>>,
+    },
+    ImportFinished {
+        project_id: String,
+        imported: usize,
+        total: usize,
+        failures: Vec<FailureReport>,
+    },
     ImportFailures(Vec<FailureReport>),
     Translated {
         article_id: String,

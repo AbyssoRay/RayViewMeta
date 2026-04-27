@@ -407,8 +407,7 @@ fn render_highlighted(ui: &mut egui::Ui, text: &str, keywords: &[String]) {
     };
     let highlight = egui::TextFormat {
         font_id: egui::FontId::proportional(19.0),
-        color: theme::TEXT,
-        background: theme::HIGHLIGHT_BG,
+        color: theme::HIGHLIGHT_FG,
         ..Default::default()
     };
     for (segment, is_highlighted) in segments {

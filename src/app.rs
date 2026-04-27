@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use shared::{Article, ArticleSource, ArticleUpdate, Project};
 
 use crate::api::{ApiClient, UpdateOutcome, DEFAULT_PROJECT_ID};
-use crate::tasks::{DeleteManyReport, FailureReport, TaskBus, TaskMsg};
+use crate::tasks::{DeleteManyReport, FailureReport, ImportProgress, TaskBus, TaskMsg};
 use crate::ui;
 
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:9631";
@@ -80,6 +81,7 @@ pub struct RayviewApp {
     pub status: String,
     pub last_status_at: Option<Instant>,
     pub loading: bool,
+    pub import_progress: Option<ImportProgress>,
 
     // 过滤
     pub filter_text: String,
@@ -160,6 +162,7 @@ impl RayviewApp {
             status: "欢迎使用 Rayview Meta".to_string(),
             last_status_at: Some(Instant::now()),
             loading: false,
+            import_progress: None,
             filter_text: String::new(),
             filter_decision: None,
             filter_tag: None,
@@ -504,6 +507,7 @@ impl RayviewApp {
                 }
                 TaskMsg::Imported(r) => {
                     self.loading = false;
+                    self.import_progress = None;
                     match r {
                         Ok(added) => {
                             self.set_status(format!("已导入 {} 篇", added.len()));
@@ -511,6 +515,58 @@ impl RayviewApp {
                         }
                         Err(e) => self.set_status(format!("导入失败: {e}")),
                     }
+                }
+                TaskMsg::ImportProgress {
+                    project_id,
+                    progress,
+                } => {
+                    if project_id == self.persisted.selected_project_id {
+                        self.loading = true;
+                        self.set_status(progress.message.clone());
+                        self.import_progress = Some(progress);
+                    }
+                }
+                TaskMsg::ImportedOne { project_id, result } => {
+                    if project_id != self.persisted.selected_project_id {
+                        continue;
+                    }
+                    match result {
+                        Ok(article) => {
+                            let article = *article;
+                            if !self
+                                .articles
+                                .iter()
+                                .any(|existing| existing.id == article.id)
+                            {
+                                self.articles.push(article.clone());
+                            }
+                            self.set_status(format!("已导入：{}", article.title));
+                        }
+                        Err(error) => self.set_status(format!("单篇导入失败: {error}")),
+                    }
+                }
+                TaskMsg::ImportFinished {
+                    project_id,
+                    imported,
+                    total,
+                    failures,
+                } => {
+                    if project_id != self.persisted.selected_project_id {
+                        self.refresh_projects();
+                        continue;
+                    }
+                    self.loading = false;
+                    self.import_progress = None;
+                    if !failures.is_empty() {
+                        let failed = failures.len();
+                        self.set_failure_report("导入失败明细", failures);
+                        self.set_status(format!(
+                            "PDF 导入完成：成功 {imported}/{total} 篇，失败 {failed} 篇"
+                        ));
+                    } else {
+                        self.set_status(format!("PDF 导入完成：成功 {imported}/{total} 篇"));
+                    }
+                    self.refresh_projects();
                 }
                 TaskMsg::ImportFailures(items) => {
                     let count = items.len();
@@ -719,8 +775,45 @@ impl eframe::App for RayviewApp {
 
 fn configure_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
+
+    let regular_font = load_font_resource(
+        "NotoSerifCJKsc-Regular.otf",
+        "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf",
+    );
+    let bold_font = load_font_resource(
+        "NotoSerifCJKsc-Bold.otf",
+        "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Bold.otf",
+    );
+
+    if let Some(bytes) = regular_font {
+        fonts.font_data.insert(
+            "source_han_serif_sc".to_string(),
+            egui::FontData::from_owned(bytes).into(),
+        );
+    }
+    if let Some(bytes) = bold_font {
+        fonts.font_data.insert(
+            "source_han_serif_sc_bold".to_string(),
+            egui::FontData::from_owned(bytes).into(),
+        );
+    }
+
+    if fonts.font_data.contains_key("source_han_serif_sc_bold") {
+        fonts.families.insert(
+            egui::FontFamily::Name("source_han_serif_sc_bold".into()),
+            vec![
+                "source_han_serif_sc_bold".to_string(),
+                "source_han_serif_sc".to_string(),
+            ],
+        );
+    }
+
     let mut proportional_fonts = Vec::new();
-    let mut fallback_fonts = Vec::new();
+    let mut monospace_fallbacks = Vec::new();
+    if fonts.font_data.contains_key("source_han_serif_sc") {
+        proportional_fonts.push("source_han_serif_sc".to_string());
+        monospace_fallbacks.push("source_han_serif_sc".to_string());
+    }
 
     if let Some(bytes) = load_first_existing(&[
         r"C:\Windows\Fonts\times.ttf",
@@ -736,52 +829,96 @@ fn configure_fonts(ctx: &egui::Context) {
         proportional_fonts.push("times_new_roman".to_string());
     }
 
-    if let Some(bytes) = load_first_existing(&[
-        r"C:\Windows\Fonts\msyh.ttc",
-        r"C:\Windows\Fonts\msyh.ttf",
-        r"C:\Windows\Fonts\msyhbd.ttc",
-        r"C:\Windows\Fonts\Deng.ttf",
-        r"C:\Windows\Fonts\simhei.ttf",
-        r"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        r"/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf",
-        r"/System/Library/Fonts/PingFang.ttc",
-    ]) {
-        fonts.font_data.insert(
-            "cjk_ui".to_string(),
-            egui::FontData::from_owned(bytes).into(),
-        );
-        fallback_fonts.push("cjk_ui".to_string());
-    }
-
-    if let Some(bytes) = load_first_existing(&[
-        r"C:\Windows\Fonts\simsun.ttc",
-        r"C:\Windows\Fonts\simsun.ttf",
-        r"C:\Windows\Fonts\NSimSun.ttf",
-        r"/usr/share/fonts/opentype/source-han-serif/SourceHanSerifSC-Regular.otf",
-        r"/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
-        r"/System/Library/Fonts/Supplemental/Songti.ttc",
-    ]) {
-        fonts.font_data.insert(
-            "songti".to_string(),
-            egui::FontData::from_owned(bytes).into(),
-        );
-        fallback_fonts.push("songti".to_string());
-    }
-
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        let existing = fonts.families.get(&family).cloned().unwrap_or_default();
-        let mut merged = proportional_fonts.clone();
-        merged.extend(fallback_fonts.clone());
-        for font_name in existing {
-            if !merged.contains(&font_name) {
-                merged.push(font_name);
-            }
+    let existing_proportional = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    for font_name in existing_proportional {
+        if !proportional_fonts.contains(&font_name) {
+            proportional_fonts.push(font_name);
         }
-        fonts.families.insert(family, merged);
     }
+    fonts
+        .families
+        .insert(egui::FontFamily::Proportional, proportional_fonts);
+
+    let existing_monospace = fonts
+        .families
+        .get(&egui::FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
+    for font_name in existing_monospace {
+        if !monospace_fallbacks.contains(&font_name) {
+            monospace_fallbacks.push(font_name);
+        }
+    }
+    fonts
+        .families
+        .insert(egui::FontFamily::Monospace, monospace_fallbacks);
+
     ctx.set_fonts(fonts);
 }
 
 fn load_first_existing(paths: &[&str]) -> Option<Vec<u8>> {
     paths.iter().find_map(|path| std::fs::read(path).ok())
+}
+
+fn load_font_resource(file_name: &str, url: &str) -> Option<Vec<u8>> {
+    let cache_path = font_cache_dir().map(|dir| dir.join(file_name));
+    if let Some(path) = cache_path.as_ref() {
+        if let Ok(bytes) = std::fs::read(path) {
+            if is_plausible_font(&bytes) {
+                return Some(bytes);
+            }
+        }
+    }
+
+    let bytes = download_font(url).ok()?;
+    if let Some(path) = cache_path {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let temp_path = path.with_extension("otf.tmp");
+        if std::fs::write(&temp_path, &bytes).is_ok() {
+            let _ = std::fs::rename(temp_path, path);
+        }
+    }
+    Some(bytes)
+}
+
+fn font_cache_dir() -> Option<PathBuf> {
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        return Some(
+            PathBuf::from(local_app_data)
+                .join("RayViewMeta")
+                .join("fonts"),
+        );
+    }
+    if let Some(cache_home) = std::env::var_os("XDG_CACHE_HOME") {
+        return Some(PathBuf::from(cache_home).join("RayViewMeta").join("fonts"));
+    }
+    std::env::var_os("HOME").map(|home| {
+        PathBuf::from(home)
+            .join(".cache")
+            .join("RayViewMeta")
+            .join("fonts")
+    })
+}
+
+fn download_font(url: &str) -> anyhow::Result<Vec<u8>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("RayviewMeta/0.1 font-loader")
+        .build()?;
+    let response = client.get(url).send()?.error_for_status()?;
+    let bytes = response.bytes()?.to_vec();
+    if !is_plausible_font(&bytes) {
+        anyhow::bail!("downloaded font file is invalid or too small");
+    }
+    Ok(bytes)
+}
+
+fn is_plausible_font(bytes: &[u8]) -> bool {
+    bytes.len() > 1_000_000 && (bytes.starts_with(b"OTTO") || bytes.starts_with(&[0, 1, 0, 0]))
 }

@@ -4,7 +4,7 @@ use shared::{ArticleSource, NewArticle};
 
 use crate::api::ApiClient;
 use crate::app::RayviewApp;
-use crate::tasks::{FailureReport, TaskMsg};
+use crate::tasks::{FailureReport, ImportProgress, TaskMsg};
 use crate::ui::theme;
 use anyhow::anyhow;
 
@@ -173,57 +173,61 @@ fn parse_reference_input(input: &str) -> ParsedReferenceInput {
 }
 
 fn spawn_pdf_import(app: &mut RayviewApp, paths: Vec<std::path::PathBuf>) {
+    if paths.is_empty() {
+        app.set_status("没有选择 PDF 文件");
+        return;
+    }
     let api = app.api.clone();
+    let project_id = app.persisted.selected_project_id.clone();
+    let total = paths.len();
     app.loading = true;
-    app.set_status(format!("正在解析 {} 个 PDF", paths.len()));
+    app.import_progress = Some(ImportProgress {
+        current: 0,
+        total,
+        item: String::new(),
+        message: format!("正在导入 PDF（0/{total}）"),
+    });
+    app.set_status(format!("正在导入 PDF（0/{total}）"));
     app.bus.spawn(move |tx| {
-        let mut payloads: Vec<NewArticle> = Vec::new();
         let mut failures: Vec<FailureReport> = Vec::new();
-        for path in &paths {
-            match crate::pdf::extract_from_pdf(path) {
-                Ok(article) => payloads.push(article),
-                Err(error) => {
-                    failures.push(FailureReport::new(
-                        path.display().to_string(),
-                        error.to_string(),
-                    ));
+        let mut imported = 0usize;
+        for (index, path) in paths.into_iter().enumerate() {
+            let current = index + 1;
+            let item = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| path.display().to_string());
+            let _ = tx.send(TaskMsg::ImportProgress {
+                project_id: project_id.clone(),
+                progress: ImportProgress {
+                    current,
+                    total,
+                    item: item.clone(),
+                    message: format!("正在检索并导入 PDF（{current}/{total}）：{item}"),
+                },
+            });
+
+            match crate::pdf::extract_from_pdf(&path).and_then(|payload| api.create(&payload)) {
+                Ok(article) => {
+                    imported += 1;
+                    let _ = tx.send(TaskMsg::ImportedOne {
+                        project_id: project_id.clone(),
+                        result: Ok(Box::new(article)),
+                    });
                 }
+                Err(error) => failures.push(FailureReport::new(
+                    path.display().to_string(),
+                    error.to_string(),
+                )),
             }
         }
-        if payloads.is_empty() {
-            let detail = failures
-                .first()
-                .map(|failure| failure.reason.clone())
-                .unwrap_or_else(|| "未找到可导入 PDF".to_string());
-            if !failures.is_empty() {
-                let _ = tx.send(TaskMsg::ImportFailures(failures));
-            }
-            let _ = tx.send(TaskMsg::Imported(Err(anyhow!("未导入任何 PDF。{detail}"))));
-            return;
-        }
-        match upload_all(&api, payloads) {
-            UploadResult {
-                articles,
-                failures: upload_failures,
-            } if !articles.is_empty() => {
-                failures.extend(upload_failures);
-                let _ = tx.send(TaskMsg::Imported(Ok(articles)));
-            }
-            UploadResult {
-                failures: upload_failures,
-                ..
-            } => {
-                failures.extend(upload_failures);
-                let detail = failures
-                    .first()
-                    .map(|failure| failure.reason.clone())
-                    .unwrap_or_else(|| "上传失败".to_string());
-                let _ = tx.send(TaskMsg::Imported(Err(anyhow!(detail))));
-            }
-        }
-        if !failures.is_empty() {
-            let _ = tx.send(TaskMsg::ImportFailures(failures));
-        }
+        let _ = tx.send(TaskMsg::ImportFinished {
+            project_id,
+            imported,
+            total,
+            failures,
+        });
     });
 }
 

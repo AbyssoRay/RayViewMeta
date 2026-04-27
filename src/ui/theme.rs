@@ -1,24 +1,27 @@
-pub const BG: egui::Color32 = egui::Color32::from_rgb(30, 30, 30);
-pub const HEADER: egui::Color32 = egui::Color32::from_rgb(37, 37, 38);
-pub const SURFACE: egui::Color32 = egui::Color32::from_rgb(45, 45, 48);
-pub const SURFACE_2: egui::Color32 = egui::Color32::from_rgb(51, 51, 51);
-pub const SURFACE_3: egui::Color32 = egui::Color32::from_rgb(62, 62, 64);
-pub const LINE: egui::Color32 = egui::Color32::from_rgb(82, 82, 86);
-pub const LINE_SOFT: egui::Color32 = egui::Color32::from_rgb(63, 63, 70);
-pub const TEXT: egui::Color32 = egui::Color32::from_rgb(212, 212, 212);
-pub const MUTED: egui::Color32 = egui::Color32::from_rgb(156, 156, 156);
-pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(190, 190, 190);
-pub const CYAN: egui::Color32 = egui::Color32::from_rgb(180, 180, 180);
-pub const DANGER: egui::Color32 = egui::Color32::from_rgb(210, 92, 92);
-pub const SUCCESS: egui::Color32 = egui::Color32::from_rgb(125, 180, 125);
-pub const HIGHLIGHT_BG: egui::Color32 = egui::Color32::from_rgb(76, 76, 76);
+pub const BG: egui::Color32 = egui::Color32::from_rgb(10, 10, 12);
+pub const HEADER: egui::Color32 = egui::Color32::from_rgb(15, 15, 18);
+pub const SURFACE: egui::Color32 = egui::Color32::from_rgb(24, 24, 28);
+pub const SURFACE_2: egui::Color32 = egui::Color32::from_rgb(31, 31, 36);
+pub const SURFACE_3: egui::Color32 = egui::Color32::from_rgb(39, 39, 45);
+pub const LINE: egui::Color32 = egui::Color32::from_rgb(58, 58, 66);
+pub const LINE_SOFT: egui::Color32 = egui::Color32::from_rgb(42, 42, 48);
+pub const TEXT: egui::Color32 = egui::Color32::WHITE;
+pub const MUTED: egui::Color32 = egui::Color32::from_rgb(140, 140, 148);
+pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(210, 184, 116);
+pub const CYAN: egui::Color32 = egui::Color32::from_rgb(198, 198, 205);
+pub const DANGER: egui::Color32 = egui::Color32::from_rgb(224, 96, 96);
+pub const SUCCESS: egui::Color32 = egui::Color32::from_rgb(130, 196, 130);
+pub const HIGHLIGHT_FG: egui::Color32 = egui::Color32::from_rgb(255, 203, 107);
 
 pub fn apply(ctx: &egui::Context) {
     let mut style = (*ctx.global_style()).clone();
     style.text_styles = [
         (
             egui::TextStyle::Heading,
-            egui::FontId::new(25.0, egui::FontFamily::Proportional),
+            egui::FontId::new(
+                25.0,
+                egui::FontFamily::Name("source_han_serif_sc_bold".into()),
+            ),
         ),
         (
             egui::TextStyle::Body,
@@ -41,10 +44,10 @@ pub fn apply(ctx: &egui::Context) {
     style.visuals = egui::Visuals::dark();
     style.visuals.panel_fill = BG;
     style.visuals.window_fill = SURFACE;
-    style.visuals.extreme_bg_color = egui::Color32::from_rgb(24, 24, 24);
+    style.visuals.extreme_bg_color = BG;
     style.visuals.override_text_color = Some(TEXT);
     style.visuals.selection.bg_fill = ACCENT;
-    style.visuals.selection.stroke = egui::Stroke::new(1.0, TEXT);
+    style.visuals.selection.stroke = egui::Stroke::new(1.0, BG);
     style.visuals.hyperlink_color = CYAN;
 
     style.visuals.widgets.noninteractive.bg_fill = SURFACE;
@@ -56,7 +59,7 @@ pub fn apply(ctx: &egui::Context) {
     style.visuals.widgets.hovered.bg_fill = SURFACE_3;
     style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, TEXT);
     style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, ACCENT);
-    style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(74, 74, 76);
+    style.visuals.widgets.active.bg_fill = BG;
     style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, TEXT);
     style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, ACCENT);
 
@@ -87,9 +90,9 @@ pub fn row_frame(selected: bool) -> egui::Frame {
         egui::Stroke::new(1.0, LINE_SOFT)
     };
     let fill = if selected {
-        egui::Color32::from_rgb(56, 56, 58)
+        egui::Color32::from_rgb(18, 18, 22)
     } else {
-        egui::Color32::from_rgb(38, 38, 40)
+        egui::Color32::from_rgb(21, 21, 25)
     };
     egui::Frame::new()
         .fill(fill)
@@ -116,11 +119,11 @@ pub fn removable_chip_button(ui: &mut egui::Ui, text: impl Into<String>) -> egui
     let text = text.into();
     ui.scope(|ui| {
         let visuals = &mut ui.style_mut().visuals;
-        visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(27, 32, 39);
+        visuals.widgets.inactive.bg_fill = SURFACE_2;
         visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, LINE);
-        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(48, 30, 31);
+        visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(45, 26, 28);
         visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.4, DANGER);
-        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(60, 32, 32);
+        visuals.widgets.active.bg_fill = egui::Color32::from_rgb(18, 12, 13);
         visuals.widgets.active.bg_stroke = egui::Stroke::new(1.4, DANGER);
         ui.style_mut().spacing.button_padding = egui::vec2(10.0, 4.0);
         ui.add(egui::Button::new(
