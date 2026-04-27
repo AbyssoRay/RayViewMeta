@@ -102,6 +102,11 @@ pub struct NewProject {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectUpdate {
+    pub name: String,
+}
+
 /// 上传时使用的负载（无 id / 时间戳，由服务端生成）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewArticle {

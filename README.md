@@ -12,7 +12,7 @@ Set a different server URL in the client settings page or with `RAYVIEW_SERVER_U
 
 ## Features
 
-- Project management from the top bar: create, select, and delete independent literature libraries.
+- Project management from the top bar: create, select, rename, and delete independent literature libraries.
 - PDF ingestion that extracts DOI values from the PDF text layer and resolves journal-page metadata through DOI links.
 - Batch import from PMID values, PubMed URLs, DOI values, doi.org links, and publisher article pages.
 - Manual record creation.
@@ -23,7 +23,7 @@ Set a different server URL in the client settings page or with `RAYVIEW_SERVER_U
 - Detail view with side-by-side English abstract and Chinese translation.
 - Network translation through the free MyMemory translation API; no in-repo translation model is shipped.
 - Field-level optimistic concurrency for multi-user editing.
-- Export of included records to real `.xlsx` files.
+- Export of included records to real `.xlsx` files with title, DOI, and copy-ready reference text.
 - Single-file Windows GUI client build with no console window.
 
 ## Repository Layout

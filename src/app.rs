@@ -9,6 +9,8 @@ use crate::tasks::{DeleteManyReport, FailureReport, TaskBus, TaskMsg};
 use crate::ui;
 
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:9631";
+pub const DEFAULT_PROJECT_NAME: &str = "通用文献库";
+pub const CONFIRM_DELETE_PROJECT: &str = "删除当前文献库";
 
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
@@ -92,6 +94,9 @@ pub struct RayviewApp {
 
     // 项目管理
     pub new_project_name: String,
+    pub project_rename_name: String,
+    pub project_rename_project_id: Option<String>,
+    pub confirm_delete_project: String,
 
     // 导入失败 / 批量操作结果弹窗
     pub failure_report_title: String,
@@ -162,6 +167,9 @@ impl RayviewApp {
             manual_title: String::new(),
             manual_abstract: String::new(),
             new_project_name: String::new(),
+            project_rename_name: String::new(),
+            project_rename_project_id: None,
+            confirm_delete_project: String::new(),
             failure_report_title: String::new(),
             failure_report_items: Vec::new(),
             show_failure_report: false,
@@ -210,7 +218,16 @@ impl RayviewApp {
             .iter()
             .find(|project| project.id == self.persisted.selected_project_id)
             .map(|project| project.name.clone())
-            .unwrap_or_else(|| "Default".to_string())
+            .unwrap_or_else(|| DEFAULT_PROJECT_NAME.to_string())
+    }
+
+    pub fn ensure_project_management_buffer(&mut self) {
+        let project_id = self.persisted.selected_project_id.clone();
+        if self.project_rename_project_id.as_deref() != Some(project_id.as_str()) {
+            self.project_rename_name = self.current_project_name();
+            self.project_rename_project_id = Some(project_id);
+            self.confirm_delete_project.clear();
+        }
     }
 
     pub fn select_project(&mut self, project_id: String) {
@@ -223,6 +240,7 @@ impl RayviewApp {
         self.view = View::Library;
         self.translations.clear();
         self.clear_filters();
+        self.project_rename_project_id = None;
         self.refresh();
     }
 
@@ -242,15 +260,36 @@ impl RayviewApp {
         });
     }
 
-    pub fn submit_delete_current_project(&mut self) {
-        if self.projects.len() <= 1 {
-            self.set_status("至少需要保留一个项目");
+    pub fn submit_rename_current_project(&mut self) {
+        let name = self.project_rename_name.trim().to_string();
+        if name.is_empty() {
+            self.set_status("文献库名称不能为空");
             return;
         }
         let project_id = self.persisted.selected_project_id.clone();
         let api = self.api.clone();
         self.loading = true;
-        self.set_status("正在删除当前项目");
+        self.set_status("正在重命名文献库");
+        self.bus.spawn(move |tx| {
+            let r = api.rename_project(&project_id, &name);
+            let _ = tx.send(TaskMsg::ProjectRenamed(r));
+        });
+    }
+
+    pub fn submit_delete_current_project(&mut self) {
+        if self.projects.len() <= 1 {
+            self.set_status("至少需要保留一个项目");
+            return;
+        }
+        if self.confirm_delete_project.trim() != CONFIRM_DELETE_PROJECT {
+            self.set_status("请输入确认文本后再删除文献库");
+            return;
+        }
+        let project_id = self.persisted.selected_project_id.clone();
+        let api = self.api.clone();
+        self.loading = true;
+        self.set_status("正在删除当前文献库");
+        self.confirm_delete_project.clear();
         self.bus.spawn(move |tx| {
             let r = api.delete_project(&project_id).map(|_| project_id);
             let _ = tx.send(TaskMsg::ProjectDeleted(r));
@@ -378,6 +417,7 @@ impl RayviewApp {
                             }
                             self.api
                                 .set_project_id(self.persisted.selected_project_id.clone());
+                            self.ensure_project_management_buffer();
                             self.refresh();
                         }
                         Err(error) => self.set_status(format!("加载项目失败: {error}")),
@@ -389,6 +429,8 @@ impl RayviewApp {
                         Ok(project) => {
                             self.persisted.selected_project_id = project.id.clone();
                             self.api.set_project_id(project.id.clone());
+                            self.project_rename_name = project.name.clone();
+                            self.project_rename_project_id = Some(project.id.clone());
                             self.projects.push(project);
                             self.selected_id = None;
                             self.articles.clear();
@@ -398,6 +440,26 @@ impl RayviewApp {
                             self.refresh_projects();
                         }
                         Err(error) => self.set_status(format!("创建项目失败: {error}")),
+                    }
+                }
+                TaskMsg::ProjectRenamed(r) => {
+                    self.loading = false;
+                    match r {
+                        Ok(project) => {
+                            if let Some(slot) = self
+                                .projects
+                                .iter_mut()
+                                .find(|existing| existing.id == project.id)
+                            {
+                                *slot = project.clone();
+                            }
+                            if self.persisted.selected_project_id == project.id {
+                                self.project_rename_name = project.name;
+                                self.project_rename_project_id = Some(project.id);
+                            }
+                            self.set_status("文献库已重命名");
+                        }
+                        Err(error) => self.set_status(format!("重命名文献库失败: {error}")),
                     }
                 }
                 TaskMsg::ProjectDeleted(r) => {
@@ -414,6 +476,7 @@ impl RayviewApp {
                                 self.api
                                     .set_project_id(self.persisted.selected_project_id.clone());
                             }
+                            self.project_rename_project_id = None;
                             self.selected_id = None;
                             self.articles.clear();
                             self.translations.clear();
@@ -595,8 +658,7 @@ impl RayviewApp {
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
-            .default_width(640.0)
-            .default_height(360.0)
+            .default_size(egui::vec2(640.0, 360.0))
             .show(ctx, |ui| {
                 ui.label(format!(
                     "共 {} 条记录未成功处理。",
@@ -629,23 +691,23 @@ impl eframe::App for RayviewApp {
         self.save_persistent(storage);
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root_ui.ctx().clone();
         self.drain_messages();
 
-        ui::top_bar::show(self, ctx);
-        ui::status_bar::show(self, ctx);
+        ui::top_bar::show(self, root_ui);
+        ui::status_bar::show(self, root_ui);
 
         match self.view {
-            View::Library => ui::library::show(self, ctx),
-            View::Upload => ui::upload::show(self, ctx),
-            View::Export => ui::export_panel::show(self, ctx),
-            View::Settings => ui::settings::show(self, ctx),
-            View::Detail => ui::detail::show(self, ctx),
+            View::Library => ui::library::show(self, root_ui),
+            View::Upload => ui::upload::show(self, root_ui),
+            View::Export => ui::export_panel::show(self, root_ui),
+            View::Settings => ui::settings::show(self, root_ui),
+            View::Detail => ui::detail::show(self, root_ui),
         }
 
-        self.show_failure_report_window(ctx);
+        self.show_failure_report_window(&ctx);
 
-        // 持续重绘以便后台任务即时反映
         ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
 }
@@ -664,7 +726,7 @@ fn configure_fonts(ctx: &egui::Context) {
     ]) {
         fonts.font_data.insert(
             "times_new_roman".to_string(),
-            egui::FontData::from_owned(bytes),
+            egui::FontData::from_owned(bytes).into(),
         );
         proportional_fonts.push("times_new_roman".to_string());
     }
@@ -679,9 +741,10 @@ fn configure_fonts(ctx: &egui::Context) {
         r"/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf",
         r"/System/Library/Fonts/PingFang.ttc",
     ]) {
-        fonts
-            .font_data
-            .insert("cjk_ui".to_string(), egui::FontData::from_owned(bytes));
+        fonts.font_data.insert(
+            "cjk_ui".to_string(),
+            egui::FontData::from_owned(bytes).into(),
+        );
         fallback_fonts.push("cjk_ui".to_string());
     }
 
@@ -693,9 +756,10 @@ fn configure_fonts(ctx: &egui::Context) {
         r"/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
         r"/System/Library/Fonts/Supplemental/Songti.ttc",
     ]) {
-        fonts
-            .font_data
-            .insert("songti".to_string(), egui::FontData::from_owned(bytes));
+        fonts.font_data.insert(
+            "songti".to_string(),
+            egui::FontData::from_owned(bytes).into(),
+        );
         fallback_fonts.push("songti".to_string());
     }
 

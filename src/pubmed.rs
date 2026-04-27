@@ -211,7 +211,9 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<NewArticle>> {
             }
             Ok(Event::Empty(_)) => {}
             Ok(Event::Text(t)) => {
-                text_buf.push_str(&t.unescape().unwrap_or_default());
+                if let Ok(text) = t.xml_content() {
+                    text_buf.push_str(&text);
+                }
             }
             Ok(Event::CData(t)) => {
                 text_buf.push_str(&String::from_utf8_lossy(t.as_ref()));

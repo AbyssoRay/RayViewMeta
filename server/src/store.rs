@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use shared::{Article, ArticleUpdate, FieldVersions, NewArticle, Project};
 
 pub const DEFAULT_PROJECT_ID: &str = "default";
+pub const DEFAULT_PROJECT_NAME: &str = "通用文献库";
 
 pub enum AddResult {
     Created(Box<Article>),
@@ -101,19 +102,14 @@ impl Store {
     }
 
     pub fn create_project(&mut self, name: String) -> Result<Project> {
-        let name = name.trim();
-        let name = if name.is_empty() {
-            "Untitled Project"
-        } else {
-            name
-        };
+        let name = normalized_project_name("", &name);
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp_millis();
         self.projects.insert(
             id.clone(),
             ProjectLibrary {
                 id: id.clone(),
-                name: name.to_string(),
+                name,
                 created_at: now,
                 updated_at: now,
                 articles: BTreeMap::new(),
@@ -125,6 +121,18 @@ impl Store {
             .get(&id)
             .map(project_meta)
             .expect("project inserted"))
+    }
+
+    pub fn rename_project(&mut self, id: &str, name: String) -> Result<Option<Project>> {
+        let Some(project) = self.projects.get_mut(id) else {
+            return Ok(None);
+        };
+        let name = normalized_project_name(id, &name);
+        project.name = name;
+        project.updated_at = chrono::Utc::now().timestamp_millis();
+        let project_meta = project_meta(project);
+        self.persist()?;
+        Ok(Some(project_meta))
     }
 
     pub fn delete_project(&mut self, id: &str) -> Result<bool> {
@@ -267,7 +275,7 @@ impl Store {
                 DEFAULT_PROJECT_ID.to_string(),
                 ProjectLibrary {
                     id: DEFAULT_PROJECT_ID.to_string(),
-                    name: "Default".to_string(),
+                    name: DEFAULT_PROJECT_NAME.to_string(),
                     created_at: now,
                     updated_at: now,
                     articles: BTreeMap::new(),
@@ -285,7 +293,7 @@ fn load_projects_from_bytes(bytes: &[u8], path: &Path) -> Result<BTreeMap<String
             .with_context(|| format!("解析旧版数据文件失败 {}", path.display()))?;
         vec![StoredProject {
             id: DEFAULT_PROJECT_ID.to_string(),
-            name: "Default".to_string(),
+            name: DEFAULT_PROJECT_NAME.to_string(),
             created_at: 0,
             updated_at: 0,
             articles,
@@ -325,15 +333,12 @@ fn load_projects_from_bytes(bytes: &[u8], path: &Path) -> Result<BTreeMap<String
         } else {
             stored.id
         };
+        let name = normalized_project_name(&id, &stored.name);
         projects.insert(
             id.clone(),
             ProjectLibrary {
                 id,
-                name: if stored.name.trim().is_empty() {
-                    "Untitled Project".to_string()
-                } else {
-                    stored.name
-                },
+                name,
                 created_at,
                 updated_at,
                 articles: std::mem::take(&mut articles),
@@ -341,6 +346,17 @@ fn load_projects_from_bytes(bytes: &[u8], path: &Path) -> Result<BTreeMap<String
         );
     }
     Ok(projects)
+}
+
+fn normalized_project_name(id: &str, name: &str) -> String {
+    let name = name.trim();
+    if id == DEFAULT_PROJECT_ID && (name.is_empty() || name == "Default") {
+        DEFAULT_PROJECT_NAME.to_string()
+    } else if name.is_empty() {
+        "未命名文献库".to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 fn project_meta(project: &ProjectLibrary) -> Project {
@@ -431,4 +447,53 @@ fn has_conflicting_field(article: &Article, update: &ArticleUpdate, expected_ver
             && article.field_versions.exclusion_reason > expected_version)
         || (update.decision.is_some() && article.field_versions.decision > expected_version)
         || (update.notes.is_some() && article.field_versions.notes > expected_version)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn creates_default_project_with_generic_name() {
+        let path = temp_data_path("default_project_name");
+        let store = Store::load_or_create(&path).unwrap();
+        let projects = store.list_projects();
+
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, DEFAULT_PROJECT_ID);
+        assert_eq!(projects[0].name, DEFAULT_PROJECT_NAME);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn renames_project_and_persists() {
+        let path = temp_data_path("rename_project");
+        let mut store = Store::load_or_create(&path).unwrap();
+        let renamed = store
+            .rename_project(DEFAULT_PROJECT_ID, "糖尿病综述".to_string())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(renamed.name, "糖尿病综述");
+
+        let reloaded = Store::load_or_create(&path).unwrap();
+        let projects = reloaded.list_projects();
+        assert_eq!(projects[0].name, "糖尿病综述");
+
+        let _ = fs::remove_file(path);
+    }
+
+    fn temp_data_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rayview_meta_{label}_{}.json",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 }

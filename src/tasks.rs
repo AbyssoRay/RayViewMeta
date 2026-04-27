@@ -33,6 +33,7 @@ pub struct DeleteManyReport {
 pub enum TaskMsg {
     ProjectsRefreshed(anyhow::Result<Vec<Project>>),
     ProjectCreated(anyhow::Result<Project>),
+    ProjectRenamed(anyhow::Result<Project>),
     ProjectDeleted(anyhow::Result<String>),
     Refreshed(anyhow::Result<Vec<Article>>),
     Imported(anyhow::Result<Vec<Article>>),

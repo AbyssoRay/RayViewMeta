@@ -14,7 +14,7 @@ pub const SUCCESS: egui::Color32 = egui::Color32::from_rgb(86, 190, 126);
 pub const HIGHLIGHT_BG: egui::Color32 = egui::Color32::from_rgb(87, 63, 18);
 
 pub fn apply(ctx: &egui::Context) {
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.text_styles = [
         (
             egui::TextStyle::Heading,
@@ -62,22 +62,22 @@ pub fn apply(ctx: &egui::Context) {
 
     style.spacing.item_spacing = egui::vec2(9.0, 8.0);
     style.spacing.button_padding = egui::vec2(14.0, 7.0);
-    style.spacing.window_margin = egui::Margin::same(12.0);
-    ctx.set_style(style);
+    style.spacing.window_margin = egui::Margin::same(12);
+    ctx.set_global_style(style);
 }
 
 pub fn panel_frame() -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(SURFACE)
         .stroke(egui::Stroke::new(1.0, LINE_SOFT))
-        .inner_margin(egui::Margin::same(14.0))
-        .outer_margin(egui::Margin::same(4.0))
+        .inner_margin(egui::Margin::same(14))
+        .outer_margin(egui::Margin::same(4))
 }
 
 pub fn page_frame() -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(BG)
-        .inner_margin(egui::Margin::symmetric(20.0, 18.0))
+        .inner_margin(egui::Margin::symmetric(20, 18))
 }
 
 pub fn row_frame(selected: bool) -> egui::Frame {
@@ -91,11 +91,11 @@ pub fn row_frame(selected: bool) -> egui::Frame {
     } else {
         egui::Color32::from_rgb(18, 22, 28)
     };
-    egui::Frame::none()
+    egui::Frame::new()
         .fill(fill)
         .stroke(stroke)
-        .inner_margin(egui::Margin::symmetric(12.0, 10.0))
-        .outer_margin(egui::Margin::symmetric(0.0, 3.0))
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .outer_margin(egui::Margin::symmetric(0, 3))
 }
 
 pub fn section_label(text: impl Into<String>) -> egui::RichText {

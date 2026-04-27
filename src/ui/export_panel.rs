@@ -11,8 +11,8 @@ const CONFIRM_DELETE_ALL: &str = "删除全部文献";
 const CONFIRM_DELETE_NOT_INCLUDED: &str = "删除所有未标为纳入的文献";
 const CONFIRM_CLEAR_FILTERS: &str = "清空全部筛选";
 
-pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
-    egui::CentralPanel::default().show(ctx, |ui| {
+pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
+    egui::CentralPanel::default().show_inside(root_ui, |ui| {
         theme::page_frame().show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
@@ -43,7 +43,10 @@ fn render_export_panel(app: &mut RayviewApp, ui: &mut egui::Ui) {
                 .color(theme::MUTED),
         );
 
-        if ui.button("导出标题和 DOI 到 Excel 表格").clicked() {
+        if ui
+            .button("导出标题、DOI 和参考文献格式到 Excel 表格")
+            .clicked()
+        {
             if included_count == 0 {
                 app.set_status("没有标为“纳入”的文献可导出");
                 return;
@@ -171,13 +174,17 @@ fn export_included_articles(articles: &[Article], path: PathBuf) -> Result<usize
     worksheet.set_name("Included")?;
     worksheet.set_column_width(0, 80)?;
     worksheet.set_column_width(1, 36)?;
+    worksheet.set_column_width(2, 120)?;
     worksheet.write_string_with_format(0, 0, "Title", &header_format)?;
     worksheet.write_string_with_format(0, 1, "DOI", &header_format)?;
+    worksheet.write_string_with_format(0, 2, "Reference", &header_format)?;
 
     for (index, article) in included.iter().enumerate() {
         let row = (index + 1) as u32;
         worksheet.write_string(row, 0, &article.title)?;
         worksheet.write_string(row, 1, article.doi.as_deref().unwrap_or(""))?;
+        let reference = format_reference(article);
+        worksheet.write_string(row, 2, &reference)?;
     }
 
     workbook
@@ -196,6 +203,67 @@ fn ensure_xlsx_extension(path: PathBuf) -> PathBuf {
     } else {
         path.with_extension("xlsx")
     }
+}
+
+fn format_reference(article: &Article) -> String {
+    let year = article
+        .year
+        .map(|year| year.to_string())
+        .unwrap_or_else(|| "n.d.".to_string());
+    let mut parts = Vec::new();
+
+    if article.authors.is_empty() {
+        parts.push(sentence_part(&article.title));
+        parts.push(format!("({year})."));
+    } else {
+        parts.push(sentence_part(&article.authors.join(", ")));
+        parts.push(format!("({year})."));
+        parts.push(sentence_part(&article.title));
+    }
+
+    if let Some(journal) = article
+        .journal
+        .as_deref()
+        .filter(|journal| !journal.trim().is_empty())
+    {
+        parts.push(sentence_part(journal));
+    }
+    if let Some(doi) = article.doi.as_deref().and_then(doi_url) {
+        parts.push(doi);
+    }
+
+    parts.join(" ")
+}
+
+fn sentence_part(value: &str) -> String {
+    let value = value.trim();
+    if value.ends_with(['.', '?', '!', '。', '？', '！']) {
+        value.to_string()
+    } else {
+        format!("{value}.")
+    }
+}
+
+fn doi_url(doi: &str) -> Option<String> {
+    let mut value = doi.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.to_ascii_lowercase().starts_with("doi:") {
+        value = value[4..].trim();
+    }
+    for prefix in [
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+    ] {
+        if value.to_ascii_lowercase().starts_with(prefix) {
+            value = &value[prefix.len()..];
+            break;
+        }
+    }
+    Some(format!("https://doi.org/{value}"))
 }
 
 #[cfg(test)]
@@ -240,6 +308,27 @@ mod tests {
             ensure_xlsx_extension(PathBuf::from("included.xlsx")),
             PathBuf::from("included.xlsx")
         );
+    }
+
+    #[test]
+    fn formats_reference_with_common_citation_shape() {
+        let mut article = article("included", Decision::Include, Some("10.1234/example"));
+        article.authors = vec!["Jane Smith".to_string(), "Wei Li".to_string()];
+        article.journal = Some("Journal of Examples".to_string());
+        article.year = Some(2025);
+
+        assert_eq!(
+            format_reference(&article),
+            "Jane Smith, Wei Li. (2025). Title included. Journal of Examples. https://doi.org/10.1234/example"
+        );
+    }
+
+    #[test]
+    fn formats_reference_without_authors() {
+        let mut article = article("included", Decision::Include, None);
+        article.year = Some(2024);
+
+        assert_eq!(format_reference(&article), "Title included. (2024).");
     }
 
     fn article(id: &str, decision: Decision, doi: Option<&str>) -> Article {

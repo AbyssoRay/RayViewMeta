@@ -1,15 +1,15 @@
 use crate::app::RayviewApp;
 use crate::ui::theme;
 
-pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
-    egui::TopBottomPanel::bottom("status_bar")
-        .exact_height(34.0)
+pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
+    egui::Panel::bottom("status_bar")
+        .exact_size(34.0)
         .frame(
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(theme::HEADER)
-                .inner_margin(egui::Margin::symmetric(14.0, 5.0)),
+                .inner_margin(egui::Margin::symmetric(14, 5)),
         )
-        .show(ctx, |ui| {
+        .show_inside(root_ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Status").small().color(theme::CYAN));
                 ui.label(egui::RichText::new(&app.status).small().color(theme::TEXT));

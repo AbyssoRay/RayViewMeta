@@ -8,8 +8,8 @@ use crate::tasks::{FailureReport, TaskMsg};
 use crate::ui::theme;
 use anyhow::anyhow;
 
-pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
-    egui::CentralPanel::default().show(ctx, |ui| {
+pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
+    egui::CentralPanel::default().show_inside(root_ui, |ui| {
         theme::page_frame().show(ui, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])

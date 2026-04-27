@@ -3,11 +3,11 @@ use shared::{Article, ArticleSource, ArticleUpdate, Decision};
 use crate::app::{RayviewApp, View};
 use crate::ui::theme;
 
-pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
-    egui::SidePanel::left("library_filters")
+pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
+    egui::Panel::left("library_filters")
         .resizable(true)
-        .default_width(270.0)
-        .show(ctx, |ui| {
+        .default_size(270.0)
+        .show_inside(root_ui, |ui| {
             theme::page_frame().show(ui, |ui| {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
@@ -106,7 +106,7 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
             });
         });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show_inside(root_ui, |ui| {
         theme::page_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {

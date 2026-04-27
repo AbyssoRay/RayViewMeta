@@ -3,7 +3,7 @@ use shared::{ArticleUpdate, Decision};
 use crate::app::{RayviewApp, View};
 use crate::ui::theme;
 
-pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
+pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
     let Some(article) = app.selected_article().cloned() else {
         app.view = View::Library;
         return;
@@ -17,7 +17,7 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
     let translation = app.translations.get(&article.id).cloned();
     let (previous_id, next_id, queue_position, queue_total) = filtered_navigation(app, &article.id);
 
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show_inside(root_ui, |ui| {
         theme::page_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("返回队列").clicked() {
@@ -67,9 +67,9 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
             render_metadata(ui, &article);
             ui.separator();
 
-            egui::SidePanel::right("detail_right")
+            egui::Panel::right("detail_right")
                 .resizable(true)
-                .default_width(360.0)
+                .default_size(360.0)
                 .show_inside(ui, |ui| {
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
@@ -186,38 +186,64 @@ fn filtered_navigation(
 }
 
 fn render_metadata(ui: &mut egui::Ui, article: &shared::Article) {
-    ui.horizontal_wrapped(|ui| {
-        if let Some(journal) = &article.journal {
-            ui.label(egui::RichText::new(journal).italics().color(theme::MUTED));
-        }
-        if let Some(year) = article.year {
-            ui.label(
-                egui::RichText::new(format!("/ {year}"))
-                    .monospace()
-                    .color(theme::MUTED),
-            );
-        }
-        if let Some(pmid) = &article.pmid {
-            ui.hyperlink_to(
-                format!("PMID {pmid}"),
-                format!("https://pubmed.ncbi.nlm.nih.gov/{pmid}"),
-            );
-        }
-        if let Some(doi) = &article.doi {
-            ui.hyperlink_to(format!("DOI {doi}"), format!("https://doi.org/{doi}"));
-        }
-    });
-    if !article.authors.is_empty() {
-        ui.label(egui::RichText::new(article.authors.join(", ")).color(theme::MUTED));
-    }
-    if !article.keywords.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(egui::RichText::new("Keywords").small().color(theme::MUTED));
-            for keyword in &article.keywords {
-                ui.label(theme::chip(keyword, theme::ACCENT));
+    theme::panel_frame().show(ui, |ui| {
+        ui.label(theme::section_label("Bibliographic Metadata"));
+        metadata_row(ui, "作者", |ui| {
+            if article.authors.is_empty() {
+                ui.label(egui::RichText::new("未提供").color(theme::MUTED));
+            } else {
+                ui.label(egui::RichText::new(article.authors.join(", ")).color(theme::TEXT));
             }
         });
-    }
+        metadata_row(ui, "期刊", |ui| {
+            if let Some(journal) = &article.journal {
+                ui.label(egui::RichText::new(journal).italics().color(theme::TEXT));
+            } else {
+                ui.label(egui::RichText::new("未提供").color(theme::MUTED));
+            }
+            if let Some(year) = article.year {
+                ui.label(
+                    egui::RichText::new(format!("{year}"))
+                        .monospace()
+                        .color(theme::MUTED),
+                );
+            }
+        });
+        metadata_row(ui, "链接", |ui| {
+            let mut has_link = false;
+            if let Some(pmid) = &article.pmid {
+                ui.hyperlink_to(
+                    format!("PMID {pmid}"),
+                    format!("https://pubmed.ncbi.nlm.nih.gov/{pmid}"),
+                );
+                has_link = true;
+            }
+            if let Some(doi) = &article.doi {
+                ui.hyperlink_to(format!("DOI {doi}"), format!("https://doi.org/{doi}"));
+                has_link = true;
+            }
+            if !has_link {
+                ui.label(egui::RichText::new("未提供").color(theme::MUTED));
+            }
+        });
+        if !article.keywords.is_empty() {
+            metadata_row(ui, "关键词", |ui| {
+                for keyword in &article.keywords {
+                    ui.label(theme::chip(keyword, theme::ACCENT));
+                }
+            });
+        }
+    });
+}
+
+fn metadata_row(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal_wrapped(|ui| {
+        ui.add_sized(
+            [56.0, 20.0],
+            egui::Label::new(egui::RichText::new(label).strong().color(theme::MUTED)),
+        );
+        content(ui);
+    });
 }
 
 fn render_decision_panel(app: &mut RayviewApp, article: &shared::Article, ui: &mut egui::Ui) {

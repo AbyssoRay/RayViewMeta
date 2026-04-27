@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
-use shared::{Article, ArticleUpdate, NewArticle, NewProject, Project};
+use shared::{Article, ArticleUpdate, NewArticle, NewProject, Project, ProjectUpdate};
 
 pub const DEFAULT_PROJECT_ID: &str = "default";
 
@@ -76,6 +76,19 @@ impl ApiClient {
         let resp = self
             .http
             .post(self.url("/api/projects"))
+            .json(&payload)
+            .send()?;
+        let resp = check(resp)?;
+        Ok(resp.json()?)
+    }
+
+    pub fn rename_project(&self, id: &str, name: &str) -> Result<Project> {
+        let payload = ProjectUpdate {
+            name: name.to_string(),
+        };
+        let resp = self
+            .http
+            .patch(self.url(&format!("/api/projects/{id}")))
             .json(&payload)
             .send()?;
         let resp = check(resp)?;

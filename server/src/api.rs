@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
-use shared::{Article, ArticleUpdate, NewArticle, NewProject, Project};
+use shared::{Article, ArticleUpdate, NewArticle, NewProject, Project, ProjectUpdate};
 
 use crate::error::{AppError, AppResult};
 use crate::state::SharedState;
@@ -11,7 +11,10 @@ pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/projects", get(list_projects).post(create_project))
-        .route("/api/projects/:project_id", delete(delete_project))
+        .route(
+            "/api/projects/:project_id",
+            delete(delete_project).patch(rename_project),
+        )
         .route(
             "/api/projects/:project_id/articles",
             get(list_project_articles).post(create_project_article),
@@ -70,6 +73,22 @@ async fn delete_project(
     } else {
         Err(AppError::NotFound)
     }
+}
+
+async fn rename_project(
+    State(state): State<SharedState>,
+    Path(project_id): Path<String>,
+    Json(payload): Json<ProjectUpdate>,
+) -> AppResult<Json<Project>> {
+    if payload.name.trim().is_empty() {
+        return Err(AppError::BadRequest("project name is required".into()));
+    }
+    let mut store = state.store.write().await;
+    store
+        .rename_project(&project_id, payload.name)
+        .map_err(AppError::Internal)?
+        .map(Json)
+        .ok_or(AppError::NotFound)
 }
 
 async fn list_articles(State(state): State<SharedState>) -> AppResult<Json<Vec<Article>>> {
