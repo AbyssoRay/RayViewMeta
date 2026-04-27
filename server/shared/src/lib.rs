@@ -38,6 +38,8 @@ pub struct Article {
     #[serde(default)]
     pub pmid: Option<String>,
     #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
     pub source: ArticleSource,
     #[serde(default)]
     pub tags: Vec<String>,
@@ -80,6 +82,7 @@ pub enum ArticleSource {
     Manual,
     Pdf,
     Pubmed,
+    Web,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +117,8 @@ pub struct NewArticle {
     pub doi: Option<String>,
     #[serde(default)]
     pub pmid: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
     #[serde(default)]
     pub source: ArticleSource,
 }

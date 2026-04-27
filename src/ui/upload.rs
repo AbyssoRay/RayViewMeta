@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use shared::{ArticleSource, NewArticle};
 
 use crate::api::ApiClient;
@@ -20,7 +22,9 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
                         ui.label(theme::section_label("PDF Extraction"));
                         ui.heading("上传 PDF");
                         ui.label(
-                            egui::RichText::new("自动提取标题、摘要和 DOI；可一次选择多个文件。")
+                            egui::RichText::new(
+                                "只从 PDF 文本层识别 DOI，再访问期刊网页抓取标题、摘要和关键词；可一次选择多个文件。",
+                            )
                                 .color(theme::MUTED),
                         );
                         if ui.button("选择 PDF 文件").clicked() {
@@ -34,11 +38,11 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
                     });
 
                     theme::panel_frame().show(ui, |ui| {
-                        ui.label(theme::section_label("PubMed Batch"));
-                        ui.heading("PubMed 批量导入");
+                        ui.label(theme::section_label("Reference Links"));
+                        ui.heading("链接批量导入");
                         ui.label(
                             egui::RichText::new(
-                                "粘贴 PubMed 链接或 PMID，系统会自动识别并抓取标题与摘要。",
+                                "粘贴 PMID、PubMed 链接、DOI、doi.org 链接或期刊论文网页，系统会抓取标题、摘要和关键词。",
                             )
                             .color(theme::MUTED),
                         );
@@ -49,26 +53,29 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
                                 .hint_text(
                                     "https://pubmed.ncbi.nlm.nih.gov/12345678/\n\
                                      23456789\n\
-                                     https://www.ncbi.nlm.nih.gov/pubmed/34567890",
+                                     10.1016/j.cell.2020.01.001\n\
+                                     https://doi.org/10.1038/s41586-024-00000-0\n\
+                                     https://www.nature.com/articles/s41586-024-00000-0",
                                 ),
                         );
                         ui.horizontal(|ui| {
                             if ui.button("识别并导入").clicked() {
-                                let parsed = crate::pubmed::parse_pubmed_input(&app.pubmed_input);
-                                let rejected = parsed
-                                    .rejected
-                                    .into_iter()
-                                    .map(|reason| FailureReport::new("PubMed 输入", reason))
-                                    .collect::<Vec<_>>();
-                                if parsed.pmids.is_empty() {
-                                    let reason = rejected
+                                let parsed = parse_reference_input(&app.pubmed_input);
+                                if parsed.pmids.is_empty() && parsed.article_inputs.is_empty() {
+                                    let reason = parsed
+                                        .rejected
                                         .first()
                                         .map(|failure| failure.reason.as_str())
-                                        .unwrap_or("请输入 PMID 或 PubMed 文献链接");
-                                    app.set_status(format!("未识别到可用 PMID：{reason}"));
-                                    app.set_failure_report("导入失败明细", rejected);
+                                        .unwrap_or("请输入 PMID、DOI 或论文网页链接");
+                                    app.set_status(format!("未识别到可用文献链接：{reason}"));
+                                    app.set_failure_report("导入失败明细", parsed.rejected);
                                 } else {
-                                    spawn_pubmed_import(app, parsed.pmids, rejected);
+                                    spawn_reference_import(
+                                        app,
+                                        parsed.pmids,
+                                        parsed.article_inputs,
+                                        parsed.rejected,
+                                    );
                                 }
                             }
                             if ui.button("清空输入").clicked() {
@@ -100,6 +107,7 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
                                     year: None,
                                     doi: None,
                                     pmid: None,
+                                    keywords: Vec::new(),
                                     source: ArticleSource::Manual,
                                 };
                                 app.manual_title.clear();
@@ -111,6 +119,57 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
                 });
         });
     });
+}
+
+#[derive(Default)]
+struct ParsedReferenceInput {
+    pmids: Vec<String>,
+    article_inputs: Vec<String>,
+    rejected: Vec<FailureReport>,
+}
+
+fn parse_reference_input(input: &str) -> ParsedReferenceInput {
+    let mut parsed = ParsedReferenceInput::default();
+    let mut seen_pmids = HashSet::new();
+    let mut seen_articles = HashSet::new();
+
+    for raw_line in input.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut accepted_on_line = false;
+        for token in
+            line.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '，' | '；'))
+        {
+            let token = token.trim();
+            if token.is_empty() || token.eq_ignore_ascii_case("pmid") {
+                continue;
+            }
+            if let Some(pmid) = crate::pubmed::parse_pubmed_token(token) {
+                accepted_on_line = true;
+                if seen_pmids.insert(pmid.clone()) {
+                    parsed.pmids.push(pmid);
+                }
+                continue;
+            }
+            if crate::doi::is_supported_article_input(token) {
+                accepted_on_line = true;
+                let key = crate::doi::canonical_input_key(token);
+                if seen_articles.insert(key) {
+                    parsed.article_inputs.push(token.to_string());
+                }
+            }
+        }
+        if !accepted_on_line {
+            parsed.rejected.push(FailureReport::new(
+                "文献链接输入",
+                format!("无法识别 PMID、DOI 或论文网页链接: {line}"),
+            ));
+        }
+    }
+
+    parsed
 }
 
 fn spawn_pdf_import(app: &mut RayviewApp, paths: Vec<std::path::PathBuf>) {
@@ -168,68 +227,90 @@ fn spawn_pdf_import(app: &mut RayviewApp, paths: Vec<std::path::PathBuf>) {
     });
 }
 
-fn spawn_pubmed_import(app: &mut RayviewApp, pmids: Vec<String>, rejected: Vec<FailureReport>) {
+fn spawn_reference_import(
+    app: &mut RayviewApp,
+    pmids: Vec<String>,
+    article_inputs: Vec<String>,
+    rejected: Vec<FailureReport>,
+) {
     let api = app.api.clone();
     app.loading = true;
+    let mut parts = Vec::new();
+    if !pmids.is_empty() {
+        parts.push(format!("{} 个 PMID", pmids.len()));
+    }
+    if !article_inputs.is_empty() {
+        parts.push(format!("{} 个 DOI/网页链接", article_inputs.len()));
+    }
     let suffix = if rejected.is_empty() {
         String::new()
     } else {
         format!("，已忽略 {} 条无法识别的输入", rejected.len())
     };
-    app.set_status(format!("正在抓取 {} 篇 PubMed 文章{suffix}", pmids.len()));
+    app.set_status(format!("正在抓取 {}{suffix}", parts.join("、")));
     app.bus.spawn(move |tx| {
         let mut failures = rejected;
-        match crate::pubmed::fetch_pubmed_with_failures(&pmids) {
-            Ok(fetch) => {
-                failures.extend(fetch.failures.into_iter().map(|failure| {
-                    FailureReport::new(format!("PMID {}", failure.pmid), failure.reason)
-                }));
-
-                if fetch.articles.is_empty() {
-                    if !failures.is_empty() {
-                        let _ = tx.send(TaskMsg::ImportFailures(failures));
-                    }
-                    let _ = tx.send(TaskMsg::Imported(Err(anyhow!("未导入任何 PubMed 文献"))));
-                    return;
+        let mut payloads = Vec::new();
+        if !pmids.is_empty() {
+            match crate::pubmed::fetch_pubmed_with_failures(&pmids) {
+                Ok(fetch) => {
+                    failures.extend(fetch.failures.into_iter().map(|failure| {
+                        FailureReport::new(format!("PMID {}", failure.pmid), failure.reason)
+                    }));
+                    payloads.extend(fetch.articles);
                 }
-
-                match upload_all(&api, fetch.articles) {
-                    UploadResult {
-                        articles,
-                        failures: upload_failures,
-                    } if !articles.is_empty() => {
-                        failures.extend(upload_failures);
-                        let _ = tx.send(TaskMsg::Imported(Ok(articles)));
-                    }
-                    UploadResult {
-                        failures: upload_failures,
-                        ..
-                    } => {
-                        failures.extend(upload_failures);
-                        let detail = failures
-                            .first()
-                            .map(|failure| failure.reason.clone())
-                            .unwrap_or_else(|| "上传失败".to_string());
-                        let _ = tx.send(TaskMsg::Imported(Err(anyhow!(detail))));
-                    }
-                }
-
-                if !failures.is_empty() {
-                    let _ = tx.send(TaskMsg::ImportFailures(failures));
+                Err(error) => {
+                    let reason = error.to_string();
+                    failures.extend(
+                        pmids
+                            .iter()
+                            .map(|pmid| FailureReport::new(format!("PMID {pmid}"), reason.clone())),
+                    );
                 }
             }
-            Err(error) => {
-                let reason = error.to_string();
-                failures.extend(
-                    pmids
-                        .into_iter()
-                        .map(|pmid| FailureReport::new(format!("PMID {pmid}"), reason.clone())),
-                );
-                if !failures.is_empty() {
-                    let _ = tx.send(TaskMsg::ImportFailures(failures));
-                }
-                let _ = tx.send(TaskMsg::Imported(Err(anyhow!("PubMed 抓取失败: {reason}"))));
+        }
+        for input in article_inputs {
+            match crate::doi::fetch_article_from_input(&input, ArticleSource::Web) {
+                Ok(article) => payloads.push(article),
+                Err(error) => failures.push(FailureReport::new(input, error.to_string())),
             }
+        }
+
+        if payloads.is_empty() {
+            let detail = failures
+                .first()
+                .map(|failure| failure.reason.clone())
+                .unwrap_or_else(|| "未找到可导入文献".to_string());
+            if !failures.is_empty() {
+                let _ = tx.send(TaskMsg::ImportFailures(failures));
+            }
+            let _ = tx.send(TaskMsg::Imported(Err(anyhow!("未导入任何文献。{detail}"))));
+            return;
+        }
+
+        match upload_all(&api, payloads) {
+            UploadResult {
+                articles,
+                failures: upload_failures,
+            } if !articles.is_empty() => {
+                failures.extend(upload_failures);
+                let _ = tx.send(TaskMsg::Imported(Ok(articles)));
+            }
+            UploadResult {
+                failures: upload_failures,
+                ..
+            } => {
+                failures.extend(upload_failures);
+                let detail = failures
+                    .first()
+                    .map(|failure| failure.reason.clone())
+                    .unwrap_or_else(|| "上传失败".to_string());
+                let _ = tx.send(TaskMsg::Imported(Err(anyhow!(detail))));
+            }
+        }
+
+        if !failures.is_empty() {
+            let _ = tx.send(TaskMsg::ImportFailures(failures));
         }
     });
 }
@@ -254,6 +335,8 @@ fn upload_all(api: &ApiClient, payloads: Vec<NewArticle>) -> UploadResult {
     for payload in payloads {
         let item = if let Some(pmid) = payload.pmid.as_deref().filter(|pmid| !pmid.is_empty()) {
             format!("PMID {pmid}")
+        } else if let Some(doi) = payload.doi.as_deref().filter(|doi| !doi.is_empty()) {
+            format!("DOI {doi}")
         } else {
             payload.title.clone()
         };
@@ -263,4 +346,25 @@ fn upload_all(api: &ApiClient, payloads: Vec<NewArticle>) -> UploadResult {
         }
     }
     UploadResult { articles, failures }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_mixed_reference_inputs() {
+        let parsed = parse_reference_input(
+            "https://pubmed.ncbi.nlm.nih.gov/12345678/\n\
+             PMID:23456789\n\
+             https://doi.org/10.1016/j.cell.2020.01.001\n\
+             10.1016/j.cell.2020.01.001\n\
+             https://www.nature.com/articles/s41586-024-00000-0\n\
+             not a reference",
+        );
+
+        assert_eq!(parsed.pmids, vec!["12345678", "23456789"]);
+        assert_eq!(parsed.article_inputs.len(), 2);
+        assert_eq!(parsed.rejected.len(), 1);
+    }
 }

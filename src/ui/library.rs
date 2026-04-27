@@ -50,6 +50,7 @@ pub fn show(app: &mut RayviewApp, ctx: &egui::Context) {
                                 for source in [
                                     ArticleSource::Pdf,
                                     ArticleSource::Pubmed,
+                                    ArticleSource::Web,
                                     ArticleSource::Manual,
                                 ] {
                                     let selected = app.filter_source == Some(source);
@@ -318,6 +319,7 @@ fn source_label(source: ArticleSource) -> &'static str {
         ArticleSource::Manual => "Manual",
         ArticleSource::Pdf => "PDF",
         ArticleSource::Pubmed => "PubMed",
+        ArticleSource::Web => "Web",
     }
 }
 

@@ -1,6 +1,6 @@
 # Rayview Meta
 
-Rayview Meta is a desktop-first literature screening tool for systematic reviews and meta-analysis workflows. The project contains a Windows desktop client and a standalone Rust HTTP server. The client handles PDF import, PubMed import, screening decisions, labels, notes, bilingual abstract review, and export. The server stores project-scoped literature libraries and coordinates multi-user edits.
+Rayview Meta is a desktop-first literature screening tool for systematic reviews and meta-analysis workflows. The project contains a Windows desktop client and a standalone Rust HTTP server. The client handles DOI-based PDF import, PubMed import, DOI and publisher article link import, screening decisions, labels, notes, bilingual abstract review, and export. The server stores project-scoped literature libraries and coordinates multi-user edits.
 
 The default client endpoint is local development:
 
@@ -13,12 +13,13 @@ Set a different server URL in the client settings page or with `RAYVIEW_SERVER_U
 ## Features
 
 - Project management from the top bar: create, select, and delete independent literature libraries.
-- PDF ingestion with title, abstract, and DOI extraction heuristics.
-- PubMed batch import from PMID values or PubMed URLs.
+- PDF ingestion that extracts DOI values from the PDF text layer and resolves journal-page metadata through DOI links.
+- Batch import from PMID values, PubMed URLs, DOI values, doi.org links, and publisher article pages.
 - Manual record creation.
 - Duplicate rejection inside the same project when either normalized title or DOI already exists.
 - Rayyan-style screening decisions: undecided, include, exclude, and maybe.
 - Tags, starred records, exclusion reasons, notes, and keyword highlighting.
+- Publication keywords are imported when publisher pages, PubMed, or Crossref expose them.
 - Detail view with side-by-side English abstract and Chinese translation.
 - Network translation through the free MyMemory translation API; no in-repo translation model is shipped.
 - Field-level optimistic concurrency for multi-user editing.
@@ -49,7 +50,7 @@ Private deployment notes, SSH keys, host names, and upload commands should stay 
 - Rust stable.
 - Windows for building and running the desktop client as a native `.exe`.
 - Linux or Ubuntu for typical server deployment.
-- Network access from the client for PubMed import and MyMemory translation.
+- Network access from the client for PubMed import, DOI/publisher metadata import, Crossref fallback metadata, and MyMemory translation.
 
 ## Run The Server Locally
 
@@ -86,6 +87,22 @@ cargo run --release
 ```
 
 You can also change the endpoint inside the Settings view. After changing the server URL, the client reloads projects first and then loads the selected project library.
+
+## Import Sources
+
+PDF import is DOI-first. The client validates that a selected file is a PDF, extracts text only to find a DOI or DOI link, then resolves the DOI through `https://doi.org/` and reads article metadata from the publisher page. It does not guess the title or abstract from the PDF body.
+
+The link import box accepts mixed batches of:
+
+```text
+12345678
+https://pubmed.ncbi.nlm.nih.gov/12345678/
+10.1016/j.cell.2020.01.001
+https://doi.org/10.1038/s41586-024-00000-0
+https://www.nature.com/articles/s41586-024-00000-0
+```
+
+Publisher-page detection uses common journal metadata formats such as Highwire citation meta tags, Dublin Core/PRISM meta tags, Open Graph fallbacks, JSON-LD article metadata, and Crossref fallback metadata when a DOI is available. A link is rejected when it does not expose a DOI and enough article metadata to identify a real paper page. Files without a readable text layer or without a DOI are rejected with a visible failure reason.
 
 ## Build The Windows Client
 
@@ -204,7 +221,7 @@ Each article has an overall version plus per-field versions for tags, starred st
 Duplicate checks are project-scoped. A new article is rejected with HTTP `409` and the message `文献重复` when either condition is true:
 
 - Its normalized title matches an existing article title in the same project.
-- Its DOI matches an existing DOI in the same project, ignoring case and trailing periods.
+- Its DOI matches an existing DOI in the same project, ignoring case, common doi.org URL prefixes, query strings, fragments, and trailing punctuation.
 
 The client imports records one by one so a duplicate no longer blocks unrelated records in the same batch.
 

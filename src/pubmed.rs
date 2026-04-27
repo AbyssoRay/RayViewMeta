@@ -13,52 +13,7 @@ pub struct PubmedFetchResult {
     pub failures: Vec<PubmedFailure>,
 }
 
-#[derive(Debug, Default)]
-pub struct PubmedInputParse {
-    pub pmids: Vec<String>,
-    pub rejected: Vec<String>,
-}
-
-/// 解析 PubMed 输入，并返回被拒绝的行，便于在界面中提示用户。
-pub fn parse_pubmed_input(input: &str) -> PubmedInputParse {
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut rejected = Vec::new();
-
-    for raw_line in input.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let mut accepted_on_line = false;
-        for token in
-            line.split(|ch: char| ch.is_whitespace() || matches!(ch, ',' | ';' | '，' | '；'))
-        {
-            let token = token.trim();
-            if token.is_empty() || token.eq_ignore_ascii_case("pmid") {
-                continue;
-            }
-            if let Some(pmid) = parse_pubmed_token(token) {
-                accepted_on_line = true;
-                if seen.insert(pmid.clone()) {
-                    out.push(pmid);
-                }
-            }
-        }
-
-        if !accepted_on_line {
-            rejected.push(format!("无法识别 PMID 或 PubMed 链接: {line}"));
-        }
-    }
-
-    PubmedInputParse {
-        pmids: out,
-        rejected,
-    }
-}
-
-fn parse_pubmed_token(token: &str) -> Option<String> {
+pub fn parse_pubmed_token(token: &str) -> Option<String> {
     let token = token.trim_matches(|ch: char| {
         ch.is_whitespace() || matches!(ch, '<' | '>' | '(' | ')' | '[' | ']' | '"' | '\'')
     });
@@ -177,6 +132,7 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<NewArticle>> {
                         year: None,
                         doi: None,
                         pmid: None,
+                        keywords: Vec::new(),
                         source: ArticleSource::Pubmed,
                     });
                 }
@@ -224,6 +180,16 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<NewArticle>> {
                         "PMID" if path_contains(&path, "MedlineCitation") => {
                             if art.pmid.is_none() {
                                 art.pmid = Some(txt.clone());
+                            }
+                        }
+                        "Keyword" if path_contains(&path, "KeywordList") => {
+                            if !txt.is_empty()
+                                && !art
+                                    .keywords
+                                    .iter()
+                                    .any(|keyword| keyword.eq_ignore_ascii_case(&txt))
+                            {
+                                art.keywords.push(txt.clone());
                             }
                         }
                         "ArticleId" => {
@@ -295,20 +261,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_valid_pubmed_inputs_and_rejects_bad_lines() {
-        let parsed = parse_pubmed_input(
-            "https://pubmed.ncbi.nlm.nih.gov/12345678/\nPMID:23456789\nhttps://example.com/12345678\nnot a link",
+    fn parses_valid_pubmed_tokens() {
+        assert_eq!(parse_pubmed_token("12345678").as_deref(), Some("12345678"));
+        assert_eq!(
+            parse_pubmed_token("PMID:23456789").as_deref(),
+            Some("23456789")
         );
-
-        assert_eq!(parsed.pmids, vec!["12345678", "23456789"]);
-        assert_eq!(parsed.rejected.len(), 2);
+        assert_eq!(
+            parse_pubmed_token("https://pubmed.ncbi.nlm.nih.gov/34567890/").as_deref(),
+            Some("34567890")
+        );
+        assert!(parse_pubmed_token("https://example.com/12345678").is_none());
     }
 
     #[test]
-    fn deduplicates_pmids() {
-        let parsed = parse_pubmed_input("12345678\nhttps://pubmed.ncbi.nlm.nih.gov/12345678/");
-
-        assert_eq!(parsed.pmids, vec!["12345678"]);
-        assert!(parsed.rejected.is_empty());
+    fn rejects_invalid_pubmed_tokens() {
+        assert!(parse_pubmed_token("0000").is_none());
+        assert!(parse_pubmed_token("not-a-pmid").is_none());
     }
 }

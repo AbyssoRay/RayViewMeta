@@ -1,15 +1,20 @@
-// Integration smoke test: parse_pubmed_input + fetch_pubmed_with_failures (network)
+// Integration smoke test: parse_pubmed_token + fetch_pubmed_with_failures (network)
 
 #[path = "../src/pubmed.rs"]
 mod pubmed;
 
 fn main() {
     // 1) PMID extraction
-    let input = "看看这篇 https://pubmed.ncbi.nlm.nih.gov/29045013/ 还有 30053915\n以及旧链接 https://www.ncbi.nlm.nih.gov/pubmed/12345678";
-    let parsed = pubmed::parse_pubmed_input(input);
-    let ids = parsed.pmids;
+    let input = [
+        "https://pubmed.ncbi.nlm.nih.gov/29045013/",
+        "30053915",
+        "https://www.ncbi.nlm.nih.gov/pubmed/12345678",
+    ];
+    let ids = input
+        .iter()
+        .filter_map(|token| pubmed::parse_pubmed_token(token))
+        .collect::<Vec<_>>();
     println!("extracted: {ids:?}");
-    println!("rejected: {:?}", parsed.rejected);
     assert!(ids.contains(&"29045013".to_string()));
     assert!(ids.contains(&"30053915".to_string()));
     assert!(ids.contains(&"12345678".to_string()));

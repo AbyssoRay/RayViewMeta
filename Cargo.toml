@@ -24,6 +24,7 @@ once_cell = "1"
 url = "2"
 rust_xlsxwriter = "0.94.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
+scraper = "0.20"
 
 [profile.dev]
 opt-level = 1

@@ -6,6 +6,7 @@
 mod api;
 mod app;
 mod assets;
+mod doi;
 mod pdf;
 mod pubmed;
 mod tasks;

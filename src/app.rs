@@ -346,9 +346,10 @@ impl RayviewApp {
         let filter_text = self.filter_text.trim().to_lowercase();
         if !filter_text.is_empty() {
             let authors = article.authors.join(" ");
+            let keywords = article.keywords.join(" ");
             let haystack = format!(
-                "{} {} {} {}",
-                article.title, article.abstract_text, authors, article.notes
+                "{} {} {} {} {}",
+                article.title, article.abstract_text, authors, keywords, article.notes
             )
             .to_lowercase();
             if !haystack.contains(&filter_text) {

@@ -252,6 +252,7 @@ mod tests {
             year: None,
             doi: doi.map(str::to_string),
             pmid: None,
+            keywords: Vec::new(),
             source: ArticleSource::Manual,
             tags: Vec::new(),
             starred: false,

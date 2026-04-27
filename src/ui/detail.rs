@@ -210,6 +210,14 @@ fn render_metadata(ui: &mut egui::Ui, article: &shared::Article) {
     if !article.authors.is_empty() {
         ui.label(egui::RichText::new(article.authors.join(", ")).color(theme::MUTED));
     }
+    if !article.keywords.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new("Keywords").small().color(theme::MUTED));
+            for keyword in &article.keywords {
+                ui.label(theme::chip(keyword, theme::ACCENT));
+            }
+        });
+    }
 }
 
 fn render_decision_panel(app: &mut RayviewApp, article: &shared::Article, ui: &mut egui::Ui) {

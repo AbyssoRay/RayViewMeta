@@ -165,6 +165,7 @@ impl Store {
             year: new.year,
             doi: new.doi,
             pmid: new.pmid,
+            keywords: new.keywords,
             source: new.source,
             tags: Vec::new(),
             starred: false,
@@ -374,9 +375,29 @@ fn normalized_title(title: &str) -> String {
 }
 
 fn normalized_doi(doi: Option<&str>) -> Option<String> {
-    doi.map(str::trim)
-        .filter(|doi| !doi.is_empty())
-        .map(|doi| doi.trim_end_matches('.').to_ascii_lowercase())
+    doi.map(str::trim).filter(|doi| !doi.is_empty()).map(|doi| {
+        let mut value = doi.trim();
+        if value.to_ascii_lowercase().starts_with("doi:") {
+            value = value[4..].trim();
+        }
+        for prefix in [
+            "https://doi.org/",
+            "http://doi.org/",
+            "https://dx.doi.org/",
+            "http://dx.doi.org/",
+        ] {
+            if value.to_ascii_lowercase().starts_with(prefix) {
+                value = &value[prefix.len()..];
+                break;
+            }
+        }
+        value
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(value)
+            .trim_end_matches(['.', ',', ';', ':', '，', '。'])
+            .to_ascii_lowercase()
+    })
 }
 
 fn normalize_versions(article: &mut Article) {
