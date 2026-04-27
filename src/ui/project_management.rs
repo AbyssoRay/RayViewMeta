@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::app::{RayviewApp, View, CONFIRM_DELETE_PROJECT};
+use crate::app::{RayviewApp, View, CONFIRM_DELETE_PROJECT, DEFAULT_SERVER_URL};
 use crate::ui::theme;
 
 pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
@@ -11,8 +11,8 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
         theme::page_frame().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(theme::section_label("Project Library"));
-                    ui.heading("项目库管理");
+                    ui.label(theme::section_label("Settings / Project Library"));
+                    ui.heading("设置");
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("立即同步").clicked() {
@@ -29,6 +29,9 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    render_server_panel(app, ui);
+                    ui.add_space(10.0);
+
                     ui.columns(2, |columns| {
                         render_project_list(app, &mut columns[0]);
                         render_project_actions(app, &mut columns[1]);
@@ -54,11 +57,47 @@ fn sync_projects_if_due(app: &mut RayviewApp) {
     }
 }
 
+fn render_server_panel(app: &mut RayviewApp, ui: &mut egui::Ui) {
+    theme::panel_frame().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        ui.label(theme::section_label("Server"));
+        ui.heading("服务端地址");
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut app.settings_url_buf)
+                    .desired_width((ui.available_width() - 220.0).max(280.0)),
+            );
+            if ui.button("应用并刷新").clicked() {
+                let url = app.settings_url_buf.trim().to_string();
+                if !url.is_empty() {
+                    app.persisted.server_url = url.clone();
+                    app.api.set_base_url(url);
+                    app.set_status("服务端地址已更新，正在刷新");
+                    app.refresh_projects();
+                }
+            }
+            if ui.button("重置").clicked() {
+                let default = DEFAULT_SERVER_URL.to_string();
+                app.settings_url_buf = default.clone();
+                app.persisted.server_url = default.clone();
+                app.api.set_base_url(default);
+                app.set_status("已恢复默认服务端地址");
+                app.refresh_projects();
+            }
+        });
+        ui.label(
+            egui::RichText::new("包含协议与端口，例如 http://127.0.0.1:9631")
+                .small()
+                .color(theme::MUTED),
+        );
+    });
+}
+
 fn render_project_list(app: &mut RayviewApp, ui: &mut egui::Ui) {
     theme::panel_frame().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.label(theme::section_label("Libraries"));
-        ui.heading("文献库");
+        ui.heading("文献库切换");
         ui.separator();
 
         let projects = app.projects.clone();

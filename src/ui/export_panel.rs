@@ -21,8 +21,11 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
                     ui.heading("导出与批量操作");
                     ui.separator();
 
-                    render_export_panel(app, ui);
-                    render_filter_panel(app, ui);
+                    ui.columns(2, |columns| {
+                        render_export_panel(app, &mut columns[0]);
+                        render_filter_panel(app, &mut columns[1]);
+                    });
+                    ui.add_space(10.0);
                     render_delete_panel(app, ui);
                 });
         });
@@ -31,6 +34,7 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
 
 fn render_export_panel(app: &mut RayviewApp, ui: &mut egui::Ui) {
     theme::panel_frame().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
         ui.label(theme::section_label("Library Export"));
         ui.heading("导出当前文献库");
         let total_count = app.articles.len();
@@ -59,6 +63,7 @@ fn render_export_panel(app: &mut RayviewApp, ui: &mut egui::Ui) {
 
 fn render_filter_panel(app: &mut RayviewApp, ui: &mut egui::Ui) {
     theme::panel_frame().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
         ui.label(theme::section_label("Filter Reset"));
         ui.heading("清空全部筛选");
         ui.label(

@@ -2,7 +2,6 @@ pub mod detail;
 pub mod export_panel;
 pub mod library;
 pub mod project_management;
-pub mod settings;
 pub mod status_bar;
 pub mod theme;
 pub mod top_bar;

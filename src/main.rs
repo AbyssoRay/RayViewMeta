@@ -9,6 +9,7 @@ mod assets;
 mod doi;
 mod pdf;
 mod pubmed;
+mod single_instance;
 mod tasks;
 mod translation;
 mod ui;
@@ -16,6 +17,10 @@ mod ui;
 use app::RayviewApp;
 
 fn main() -> eframe::Result<()> {
+    let Some(_single_instance) = single_instance::acquire_or_activate() else {
+        return Ok(());
+    };
+
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([1200.0, 780.0])
         .with_min_inner_size([900.0, 600.0])

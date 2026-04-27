@@ -37,6 +37,13 @@ pub struct ImportProgress {
     pub message: String,
 }
 
+#[derive(Debug)]
+pub struct FontLoadResult {
+    pub regular: Option<Vec<u8>>,
+    pub bold: Option<Vec<u8>>,
+    pub errors: Vec<String>,
+}
+
 /// 异步任务结果。客户端 UI 通过轮询 receiver 获取后台线程的产出。
 pub enum TaskMsg {
     ProjectsRefreshed(anyhow::Result<Vec<Project>>),
@@ -67,6 +74,7 @@ pub enum TaskMsg {
     Updated(anyhow::Result<UpdateOutcome>),
     Deleted(anyhow::Result<String>),
     DeletedMany(anyhow::Result<DeleteManyReport>),
+    FontsLoaded(FontLoadResult),
 }
 
 pub struct TaskBus {

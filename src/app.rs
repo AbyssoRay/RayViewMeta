@@ -6,12 +6,20 @@ use serde::{Deserialize, Serialize};
 use shared::{Article, ArticleSource, ArticleUpdate, Project};
 
 use crate::api::{ApiClient, UpdateOutcome, DEFAULT_PROJECT_ID};
-use crate::tasks::{DeleteManyReport, FailureReport, ImportProgress, TaskBus, TaskMsg};
+use crate::tasks::{
+    DeleteManyReport, FailureReport, FontLoadResult, ImportProgress, TaskBus, TaskMsg,
+};
 use crate::ui;
 
 pub const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:9631";
 pub const DEFAULT_PROJECT_NAME: &str = "通用文献库";
 pub const CONFIRM_DELETE_PROJECT: &str = "删除当前文献库";
+const FONT_REGULAR_NAME: &str = "source_han_serif_sc";
+const FONT_BOLD_NAME: &str = "source_han_serif_sc_bold";
+const FONT_REGULAR_FILE: &str = "NotoSerifCJKsc-Regular.otf";
+const FONT_BOLD_FILE: &str = "NotoSerifCJKsc-Bold.otf";
+const FONT_REGULAR_URL: &str = "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf";
+const FONT_BOLD_URL: &str = "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Bold.otf";
 
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
@@ -66,7 +74,6 @@ pub enum View {
     Upload,
     Export,
     ProjectManagement,
-    Settings,
     Detail,
 }
 
@@ -81,6 +88,7 @@ pub struct RayviewApp {
     pub status: String,
     pub last_status_at: Option<Instant>,
     pub loading: bool,
+    pub fonts_loading: bool,
     pub import_progress: Option<ImportProgress>,
 
     // 过滤
@@ -129,6 +137,18 @@ pub struct RayviewApp {
     pub translations: BTreeMap<String, TranslationState>,
 }
 
+#[derive(Clone, Copy)]
+struct FontCacheStatus {
+    missing_regular: bool,
+    missing_bold: bool,
+}
+
+impl FontCacheStatus {
+    fn is_ready(self) -> bool {
+        !self.missing_regular && !self.missing_bold
+    }
+}
+
 impl RayviewApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // 加载持久化数据
@@ -144,12 +164,14 @@ impl RayviewApp {
         let mut api = ApiClient::new(persisted.server_url.clone());
         api.set_project_id(persisted.selected_project_id.clone());
 
-        // 中文字体
-        configure_fonts(&cc.egui_ctx);
+        let bus = TaskBus::default();
+
+        // 字体只从缓存同步加载；首次联网下载放到后台，避免双击后窗口迟迟不出现。
+        let font_cache_status = configure_fonts(&cc.egui_ctx);
+        let fonts_ready = font_cache_status.is_ready();
         ui::theme::apply(&cc.egui_ctx);
         let logo_texture = crate::assets::load_logo_texture(&cc.egui_ctx);
 
-        let bus = TaskBus::default();
         let mut app = Self {
             settings_url_buf: persisted.server_url.clone(),
             persisted,
@@ -159,9 +181,14 @@ impl RayviewApp {
             projects: Vec::new(),
             articles: Vec::new(),
             selected_id: None,
-            status: "欢迎使用 Rayview Meta".to_string(),
+            status: if fonts_ready {
+                "欢迎使用 Rayview Meta".to_string()
+            } else {
+                "正在准备字体资源".to_string()
+            },
             last_status_at: Some(Instant::now()),
-            loading: false,
+            loading: !fonts_ready,
+            fonts_loading: !fonts_ready,
             import_progress: None,
             filter_text: String::new(),
             filter_decision: None,
@@ -192,8 +219,45 @@ impl RayviewApp {
             logo_texture,
             translations: BTreeMap::new(),
         };
+        if !fonts_ready {
+            app.spawn_font_download(font_cache_status);
+        }
         app.refresh_projects();
         app
+    }
+
+    fn spawn_font_download(&self, cache_status: FontCacheStatus) {
+        self.bus.spawn(move |tx| {
+            let mut result = FontLoadResult {
+                regular: None,
+                bold: None,
+                errors: Vec::new(),
+            };
+
+            let regular = if cache_status.missing_regular {
+                download_and_cache_font(FONT_REGULAR_FILE, FONT_REGULAR_URL)
+            } else {
+                load_cached_font(FONT_REGULAR_FILE)
+                    .ok_or_else(|| anyhow::anyhow!("常规字体缓存已不存在"))
+            };
+            match regular {
+                Ok(bytes) => result.regular = Some(bytes),
+                Err(error) => result.errors.push(format!("常规字体下载失败: {error}")),
+            }
+
+            let bold = if cache_status.missing_bold {
+                download_and_cache_font(FONT_BOLD_FILE, FONT_BOLD_URL)
+            } else {
+                load_cached_font(FONT_BOLD_FILE)
+                    .ok_or_else(|| anyhow::anyhow!("粗体字体缓存已不存在"))
+            };
+            match bold {
+                Ok(bytes) => result.bold = Some(bytes),
+                Err(error) => result.errors.push(format!("粗体字体下载失败: {error}")),
+            }
+
+            let _ = tx.send(TaskMsg::FontsLoaded(result));
+        });
     }
 
     pub fn set_status(&mut self, s: impl Into<String>) {
@@ -404,7 +468,7 @@ impl RayviewApp {
         true
     }
 
-    pub fn drain_messages(&mut self) {
+    pub fn drain_messages(&mut self, ctx: &egui::Context) {
         while let Ok(msg) = self.bus.rx.try_recv() {
             match msg {
                 TaskMsg::ProjectsRefreshed(r) => {
@@ -626,6 +690,19 @@ impl RayviewApp {
                         Err(e) => self.set_status(format!("批量删除失败: {e}")),
                     }
                 }
+                TaskMsg::FontsLoaded(result) => {
+                    self.fonts_loading = false;
+                    apply_fonts(ctx, result.regular, result.bold);
+                    ui::theme::apply(ctx);
+                    if result.errors.is_empty() {
+                        self.set_status("字体资源已加载");
+                    } else {
+                        self.set_status(format!(
+                            "字体资源未完全加载，已使用可用字体：{}",
+                            result.errors.join("；")
+                        ));
+                    }
+                }
             }
         }
     }
@@ -753,7 +830,13 @@ impl eframe::App for RayviewApp {
 
     fn ui(&mut self, root_ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root_ui.ctx().clone();
-        self.drain_messages();
+        self.drain_messages(&ctx);
+
+        if self.fonts_loading {
+            show_startup_loading(root_ui);
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+            return;
+        }
 
         ui::top_bar::show(self, root_ui);
         ui::status_bar::show(self, root_ui);
@@ -763,7 +846,6 @@ impl eframe::App for RayviewApp {
             View::Upload => ui::upload::show(self, root_ui),
             View::Export => ui::export_panel::show(self, root_ui),
             View::ProjectManagement => ui::project_management::show(self, root_ui),
-            View::Settings => ui::settings::show(self, root_ui),
             View::Detail => ui::detail::show(self, root_ui),
         }
 
@@ -773,46 +855,87 @@ impl eframe::App for RayviewApp {
     }
 }
 
-fn configure_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
+fn show_startup_loading(root_ui: &mut egui::Ui) {
+    egui::CentralPanel::default()
+        .frame(ui::theme::page_frame())
+        .show_inside(root_ui, |ui| {
+            ui.with_layout(
+                egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.spinner();
+                        ui.add_space(14.0);
+                        ui.heading(egui::RichText::new("Rayview Meta").color(ui::theme::TEXT));
+                        ui.label(
+                            egui::RichText::new("Loading fonts and workspace")
+                                .color(ui::theme::MUTED),
+                        );
+                        ui.add_space(10.0);
+                        ui.add(
+                            egui::ProgressBar::new(0.35)
+                                .animate(true)
+                                .desired_width(260.0),
+                        );
+                    });
+                },
+            );
+        });
+}
 
-    let regular_font = load_font_resource(
-        "NotoSerifCJKsc-Regular.otf",
-        "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf",
-    );
-    let bold_font = load_font_resource(
-        "NotoSerifCJKsc-Bold.otf",
-        "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Bold.otf",
-    );
+fn configure_fonts(ctx: &egui::Context) -> FontCacheStatus {
+    let regular_font = load_cached_font(FONT_REGULAR_FILE);
+    let bold_font = load_cached_font(FONT_BOLD_FILE);
+    let status = FontCacheStatus {
+        missing_regular: regular_font.is_none(),
+        missing_bold: bold_font.is_none(),
+    };
+    apply_fonts(ctx, regular_font, bold_font);
+    status
+}
+
+fn apply_fonts(ctx: &egui::Context, regular_font: Option<Vec<u8>>, bold_font: Option<Vec<u8>>) {
+    let mut fonts = egui::FontDefinitions::default();
+    let existing_proportional = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    let existing_monospace = fonts
+        .families
+        .get(&egui::FontFamily::Monospace)
+        .cloned()
+        .unwrap_or_default();
+
+    let has_regular_font = regular_font.is_some();
+    let has_bold_font = bold_font.is_some();
 
     if let Some(bytes) = regular_font {
         fonts.font_data.insert(
-            "source_han_serif_sc".to_string(),
+            FONT_REGULAR_NAME.to_string(),
             egui::FontData::from_owned(bytes).into(),
         );
     }
     if let Some(bytes) = bold_font {
         fonts.font_data.insert(
-            "source_han_serif_sc_bold".to_string(),
+            FONT_BOLD_NAME.to_string(),
             egui::FontData::from_owned(bytes).into(),
         );
     }
 
-    if fonts.font_data.contains_key("source_han_serif_sc_bold") {
-        fonts.families.insert(
-            egui::FontFamily::Name("source_han_serif_sc_bold".into()),
-            vec![
-                "source_han_serif_sc_bold".to_string(),
-                "source_han_serif_sc".to_string(),
-            ],
-        );
-    }
-
+    let mut title_fonts = Vec::new();
     let mut proportional_fonts = Vec::new();
     let mut monospace_fallbacks = Vec::new();
-    if fonts.font_data.contains_key("source_han_serif_sc") {
-        proportional_fonts.push("source_han_serif_sc".to_string());
-        monospace_fallbacks.push("source_han_serif_sc".to_string());
+
+    if has_bold_font {
+        push_unique(&mut title_fonts, FONT_BOLD_NAME.to_string());
+    }
+    if has_regular_font {
+        push_unique(&mut title_fonts, FONT_REGULAR_NAME.to_string());
+        push_unique(&mut proportional_fonts, FONT_REGULAR_NAME.to_string());
+        push_unique(&mut monospace_fallbacks, FONT_REGULAR_NAME.to_string());
+    } else if has_bold_font {
+        push_unique(&mut proportional_fonts, FONT_BOLD_NAME.to_string());
+        push_unique(&mut monospace_fallbacks, FONT_BOLD_NAME.to_string());
     }
 
     if let Some(bytes) = load_first_existing(&[
@@ -826,33 +949,24 @@ fn configure_fonts(ctx: &egui::Context) {
             "times_new_roman".to_string(),
             egui::FontData::from_owned(bytes).into(),
         );
-        proportional_fonts.push("times_new_roman".to_string());
+        push_unique(&mut title_fonts, "times_new_roman".to_string());
+        push_unique(&mut proportional_fonts, "times_new_roman".to_string());
     }
 
-    let existing_proportional = fonts
-        .families
-        .get(&egui::FontFamily::Proportional)
-        .cloned()
-        .unwrap_or_default();
-    for font_name in existing_proportional {
-        if !proportional_fonts.contains(&font_name) {
-            proportional_fonts.push(font_name);
-        }
+    for font_name in &existing_proportional {
+        push_unique(&mut title_fonts, font_name.clone());
+        push_unique(&mut proportional_fonts, font_name.clone());
     }
+    for font_name in existing_monospace {
+        push_unique(&mut monospace_fallbacks, font_name);
+    }
+
+    fonts
+        .families
+        .insert(egui::FontFamily::Name(FONT_BOLD_NAME.into()), title_fonts);
     fonts
         .families
         .insert(egui::FontFamily::Proportional, proportional_fonts);
-
-    let existing_monospace = fonts
-        .families
-        .get(&egui::FontFamily::Monospace)
-        .cloned()
-        .unwrap_or_default();
-    for font_name in existing_monospace {
-        if !monospace_fallbacks.contains(&font_name) {
-            monospace_fallbacks.push(font_name);
-        }
-    }
     fonts
         .families
         .insert(egui::FontFamily::Monospace, monospace_fallbacks);
@@ -864,7 +978,7 @@ fn load_first_existing(paths: &[&str]) -> Option<Vec<u8>> {
     paths.iter().find_map(|path| std::fs::read(path).ok())
 }
 
-fn load_font_resource(file_name: &str, url: &str) -> Option<Vec<u8>> {
+fn load_cached_font(file_name: &str) -> Option<Vec<u8>> {
     let cache_path = font_cache_dir().map(|dir| dir.join(file_name));
     if let Some(path) = cache_path.as_ref() {
         if let Ok(bytes) = std::fs::read(path) {
@@ -873,18 +987,32 @@ fn load_font_resource(file_name: &str, url: &str) -> Option<Vec<u8>> {
             }
         }
     }
+    None
+}
 
-    let bytes = download_font(url).ok()?;
-    if let Some(path) = cache_path {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let temp_path = path.with_extension("otf.tmp");
-        if std::fs::write(&temp_path, &bytes).is_ok() {
-            let _ = std::fs::rename(temp_path, path);
-        }
+fn download_and_cache_font(file_name: &str, url: &str) -> anyhow::Result<Vec<u8>> {
+    let bytes = download_font(url)?;
+    write_cached_font(file_name, &bytes);
+    Ok(bytes)
+}
+
+fn write_cached_font(file_name: &str, bytes: &[u8]) {
+    let Some(path) = font_cache_dir().map(|dir| dir.join(file_name)) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
-    Some(bytes)
+    let temp_path = path.with_extension("otf.tmp");
+    if std::fs::write(&temp_path, bytes).is_ok() {
+        let _ = std::fs::rename(temp_path, path);
+    }
+}
+
+fn push_unique(items: &mut Vec<String>, value: String) {
+    if !items.iter().any(|item| item == &value) {
+        items.push(value);
+    }
 }
 
 fn font_cache_dir() -> Option<PathBuf> {

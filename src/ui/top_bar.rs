@@ -3,8 +3,12 @@ use crate::ui::theme;
 
 const HEADER_HEIGHT: f32 = 76.0;
 const BUTTON_HEIGHT: f32 = 36.0;
-const LOGO_WIDTH: f32 = 150.0;
-const LOGO_HEIGHT: f32 = 38.0;
+const LOGO_WIDTH: f32 = 184.0;
+const LOGO_HEIGHT: f32 = 48.0;
+const NAV_BUTTON_COUNT: f32 = 5.0;
+const NAV_BUTTON_GAP: f32 = 10.0;
+const NAV_BUTTON_MIN_WIDTH: f32 = 82.0;
+const NAV_BUTTON_MAX_WIDTH: f32 = 116.0;
 
 pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
     egui::Panel::top("top_bar")
@@ -15,7 +19,7 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
                 .inner_margin(egui::Margin::symmetric(16, 0)),
         )
         .show_inside(root_ui, |ui| {
-            ui.add_space(10.0);
+            ui.add_space(8.0);
             ui.horizontal_centered(|ui| {
                 if let Some(texture) = &app.logo_texture {
                     ui.add(
@@ -23,18 +27,22 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
                             .fit_to_exact_size(egui::vec2(LOGO_WIDTH, LOGO_HEIGHT))
                             .maintain_aspect_ratio(true),
                     );
-                    ui.add_space(10.0);
+                    ui.add_space(14.0);
                 }
-                ui.label(
-                    egui::RichText::new("Rayview Meta")
-                        .strong()
-                        .size(24.0)
-                        .color(theme::TEXT),
-                );
-                ui.add_space(14.0);
-
-                render_project_controls(ui, app);
-                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new("Rayview Meta")
+                            .strong()
+                            .size(24.0)
+                            .color(theme::TEXT),
+                    );
+                    ui.label(
+                        egui::RichText::new(app.current_project_name())
+                            .small()
+                            .color(theme::MUTED),
+                    );
+                });
+                ui.add_space(18.0);
 
                 render_toolbar_buttons(ui, app);
                 if app.loading {
@@ -50,39 +58,18 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
         });
 }
 
-fn render_project_controls(ui: &mut egui::Ui, app: &mut RayviewApp) {
-    app.ensure_project_management_buffer();
-    ui.label(egui::RichText::new("项目库").color(theme::MUTED));
-    let selected_text = app.current_project_name();
-    let projects = app.projects.clone();
-    egui::ComboBox::from_id_salt("project_selector")
-        .width(210.0)
-        .selected_text(selected_text)
-        .show_ui(ui, |ui| {
-            for project in projects {
-                let label = format!("{} ({})", project.name, project.article_count);
-                if ui
-                    .selectable_label(app.persisted.selected_project_id == project.id, label)
-                    .clicked()
-                {
-                    app.select_project(project.id);
-                }
-            }
-        });
-}
-
 fn render_toolbar_buttons(ui: &mut egui::Ui, app: &mut RayviewApp) {
-    let button_count = 6.0;
-    let gap = 8.0;
-    ui.spacing_mut().item_spacing.x = gap;
+    ui.spacing_mut().item_spacing.x = NAV_BUTTON_GAP;
     let available = ui.available_width() - if app.loading { 28.0 } else { 0.0 };
-    let button_width = ((available - gap * (button_count - 1.0)) / button_count).max(72.0);
+    let button_width = ((available - NAV_BUTTON_GAP * (NAV_BUTTON_COUNT - 1.0)) / NAV_BUTTON_COUNT)
+        .clamp(NAV_BUTTON_MIN_WIDTH, NAV_BUTTON_MAX_WIDTH);
+    let nav_width = button_width * NAV_BUTTON_COUNT + NAV_BUTTON_GAP * (NAV_BUTTON_COUNT - 1.0);
+    ui.add_space((available - nav_width).max(0.0));
 
     nav_button(ui, app, "文献库", View::Library, button_width);
     nav_button(ui, app, "导入", View::Upload, button_width);
     nav_button(ui, app, "导出", View::Export, button_width);
-    nav_button(ui, app, "项目管理", View::ProjectManagement, button_width);
-    nav_button(ui, app, "设置", View::Settings, button_width);
+    nav_button(ui, app, "设置", View::ProjectManagement, button_width);
     if ui
         .add_sized([button_width, BUTTON_HEIGHT], egui::Button::new("刷新"))
         .clicked()
