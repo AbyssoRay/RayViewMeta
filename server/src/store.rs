@@ -180,6 +180,8 @@ impl Store {
             exclusion_reason: String::new(),
             decision: shared::Decision::Undecided,
             notes: String::new(),
+            translated_abstract: None,
+            translated_keywords: Vec::new(),
             created_at: now,
             updated_at: now,
             version: 1,
@@ -189,6 +191,7 @@ impl Store {
                 exclusion_reason: 1,
                 decision: 1,
                 notes: 1,
+                translation: 1,
             },
         };
         project.articles.insert(id, article.clone());
@@ -244,6 +247,16 @@ impl Store {
         if let Some(notes) = upd.notes {
             article.notes = notes;
             article.field_versions.notes = next_version;
+            changed = true;
+        }
+        if let Some(translated_abstract) = upd.translated_abstract {
+            article.translated_abstract = Some(translated_abstract);
+            article.field_versions.translation = next_version;
+            changed = true;
+        }
+        if let Some(translated_keywords) = upd.translated_keywords {
+            article.translated_keywords = translated_keywords;
+            article.field_versions.translation = next_version;
             changed = true;
         }
         if changed {
@@ -438,6 +451,9 @@ fn normalize_versions(article: &mut Article) {
     if article.field_versions.notes == 0 {
         article.field_versions.notes = article.version;
     }
+    if article.field_versions.translation == 0 {
+        article.field_versions.translation = article.version;
+    }
 }
 
 fn has_conflicting_field(article: &Article, update: &ArticleUpdate, expected_version: u64) -> bool {
@@ -447,6 +463,8 @@ fn has_conflicting_field(article: &Article, update: &ArticleUpdate, expected_ver
             && article.field_versions.exclusion_reason > expected_version)
         || (update.decision.is_some() && article.field_versions.decision > expected_version)
         || (update.notes.is_some() && article.field_versions.notes > expected_version)
+        || ((update.translated_abstract.is_some() || update.translated_keywords.is_some())
+            && article.field_versions.translation > expected_version)
 }
 
 #[cfg(test)]
@@ -483,6 +501,53 @@ mod tests {
         let reloaded = Store::load_or_create(&path).unwrap();
         let projects = reloaded.list_projects();
         assert_eq!(projects[0].name, "糖尿病综述");
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn translation_fields_are_persisted_with_articles() {
+        let path = temp_data_path("translation_persistence");
+        let mut store = Store::load_or_create(&path).unwrap();
+        let article = match store
+            .add(
+                DEFAULT_PROJECT_ID,
+                NewArticle {
+                    title: "A trial".to_string(),
+                    abstract_text: "A source abstract.".to_string(),
+                    authors: Vec::new(),
+                    journal: None,
+                    year: None,
+                    doi: Some("10.1000/example".to_string()),
+                    pmid: None,
+                    keywords: Vec::new(),
+                    source: shared::ArticleSource::Manual,
+                },
+            )
+            .unwrap()
+            .unwrap()
+        {
+            AddResult::Created(article) => *article,
+            AddResult::Duplicate => panic!("unexpected duplicate"),
+        };
+
+        store
+            .update(
+                DEFAULT_PROJECT_ID,
+                &article.id,
+                ArticleUpdate {
+                    expected_version: Some(article.version),
+                    translated_abstract: Some("中文摘要".to_string()),
+                    translated_keywords: Some(vec!["关键词".to_string()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let reloaded = Store::load_or_create(&path).unwrap();
+        let stored = reloaded.get(DEFAULT_PROJECT_ID, &article.id).unwrap();
+        assert_eq!(stored.translated_abstract.as_deref(), Some("中文摘要"));
+        assert_eq!(stored.translated_keywords, vec!["关键词"]);
 
         let _ = fs::remove_file(path);
     }

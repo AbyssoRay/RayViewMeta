@@ -1,14 +1,15 @@
 use crate::app::{RayviewApp, View};
 use crate::ui::theme;
 
-const HEADER_HEIGHT: f32 = 76.0;
+const HEADER_HEIGHT: f32 = 96.0;
 const BUTTON_HEIGHT: f32 = 36.0;
-const LOGO_WIDTH: f32 = 184.0;
-const LOGO_HEIGHT: f32 = 48.0;
+const LOGO_WIDTH: f32 = 250.0;
+const LOGO_HEIGHT: f32 = 66.0;
 const NAV_BUTTON_COUNT: f32 = 5.0;
-const NAV_BUTTON_GAP: f32 = 10.0;
-const NAV_BUTTON_MIN_WIDTH: f32 = 82.0;
-const NAV_BUTTON_MAX_WIDTH: f32 = 116.0;
+const NAV_BUTTON_GAP: f32 = 14.0;
+const NAV_BUTTON_WIDTH: f32 = 90.0;
+const HEADER_SIDE_MARGIN: i8 = 56;
+const HEADER_GROUP_GAP: f32 = 24.0;
 
 pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
     egui::Panel::top("top_bar")
@@ -16,39 +17,27 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
         .frame(
             egui::Frame::new()
                 .fill(theme::HEADER)
-                .inner_margin(egui::Margin::symmetric(16, 0)),
+                .inner_margin(egui::Margin::symmetric(HEADER_SIDE_MARGIN, 0)),
         )
         .show_inside(root_ui, |ui| {
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             ui.horizontal_centered(|ui| {
-                if let Some(texture) = &app.logo_texture {
-                    ui.add(
-                        egui::Image::new(texture)
-                            .fit_to_exact_size(egui::vec2(LOGO_WIDTH, LOGO_HEIGHT))
-                            .maintain_aspect_ratio(true),
-                    );
-                    ui.add_space(14.0);
-                }
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new("Rayview Meta")
-                            .strong()
-                            .size(24.0)
-                            .color(theme::TEXT),
-                    );
-                    ui.label(
-                        egui::RichText::new(app.current_project_name())
-                            .small()
-                            .color(theme::MUTED),
-                    );
-                });
-                ui.add_space(18.0);
+                let nav_width =
+                    NAV_BUTTON_COUNT * NAV_BUTTON_WIDTH + (NAV_BUTTON_COUNT - 1.0) * NAV_BUTTON_GAP;
+                let right_width = nav_width;
+                let left_width = (ui.available_width() - right_width - HEADER_GROUP_GAP).max(0.0);
 
-                render_toolbar_buttons(ui, app);
-                if app.loading {
-                    ui.add_space(8.0);
-                    ui.spinner();
-                }
+                ui.allocate_ui_with_layout(
+                    egui::vec2(left_width, LOGO_HEIGHT),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| render_brand_group(ui, app),
+                );
+                ui.add_space(HEADER_GROUP_GAP);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(right_width, LOGO_HEIGHT),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| render_toolbar_buttons(ui, app),
+                );
             });
             ui.add_space(8.0);
             ui.painter().line_segment(
@@ -58,30 +47,50 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
         });
 }
 
+fn render_brand_group(ui: &mut egui::Ui, app: &RayviewApp) {
+    if let Some(texture) = &app.logo_texture {
+        ui.add(
+            egui::Image::new(texture)
+                .fit_to_exact_size(egui::vec2(LOGO_WIDTH, LOGO_HEIGHT))
+                .maintain_aspect_ratio(true),
+        );
+        ui.add_space(20.0);
+    }
+
+    ui.label(
+        egui::RichText::new("Rayview Meta")
+            .strong()
+            .size(26.0)
+            .color(theme::TEXT),
+    );
+    ui.add_space(24.0);
+
+    let label = format!("当前项目：{}", app.current_project_name());
+    ui.add_sized(
+        [ui.available_width(), BUTTON_HEIGHT],
+        egui::Label::new(egui::RichText::new(label).size(15.0).color(theme::TEXT)).truncate(),
+    )
+    .on_hover_text(app.current_project_name());
+}
+
 fn render_toolbar_buttons(ui: &mut egui::Ui, app: &mut RayviewApp) {
     ui.spacing_mut().item_spacing.x = NAV_BUTTON_GAP;
-    let available = ui.available_width() - if app.loading { 28.0 } else { 0.0 };
-    let button_width = ((available - NAV_BUTTON_GAP * (NAV_BUTTON_COUNT - 1.0)) / NAV_BUTTON_COUNT)
-        .clamp(NAV_BUTTON_MIN_WIDTH, NAV_BUTTON_MAX_WIDTH);
-    let nav_width = button_width * NAV_BUTTON_COUNT + NAV_BUTTON_GAP * (NAV_BUTTON_COUNT - 1.0);
-    ui.add_space((available - nav_width).max(0.0));
-
-    nav_button(ui, app, "文献库", View::Library, button_width);
-    nav_button(ui, app, "导入", View::Upload, button_width);
-    nav_button(ui, app, "导出", View::Export, button_width);
-    nav_button(ui, app, "设置", View::ProjectManagement, button_width);
     if ui
-        .add_sized([button_width, BUTTON_HEIGHT], egui::Button::new("刷新"))
+        .add_sized([NAV_BUTTON_WIDTH, BUTTON_HEIGHT], egui::Button::new("刷新"))
         .clicked()
     {
         app.refresh_projects();
     }
+    nav_button(ui, app, "设置", View::ProjectManagement);
+    nav_button(ui, app, "导出", View::Export);
+    nav_button(ui, app, "导入", View::Upload);
+    nav_button(ui, app, "文献库", View::Library);
 }
 
-fn nav_button(ui: &mut egui::Ui, app: &mut RayviewApp, label: &str, target: View, width: f32) {
+fn nav_button(ui: &mut egui::Ui, app: &mut RayviewApp, label: &str, target: View) {
     if ui
         .add_sized(
-            [width, BUTTON_HEIGHT],
+            [NAV_BUTTON_WIDTH, BUTTON_HEIGHT],
             egui::Button::selectable(app.view == target, label),
         )
         .clicked()

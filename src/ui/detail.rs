@@ -3,6 +3,10 @@ use shared::{ArticleUpdate, Decision};
 use crate::app::{RayviewApp, View};
 use crate::ui::theme;
 
+const ABSTRACT_FONT_SIZE: f32 = 19.0;
+const CHINESE_LINE_HEIGHT: f32 = ABSTRACT_FONT_SIZE * 1.5;
+const ABSTRACT_COLUMN_GAP: f32 = 32.0;
+
 pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
     let Some(article) = app.selected_article().cloned() else {
         app.view = View::Library;
@@ -105,6 +109,8 @@ fn render_parallel_abstract(
         ui.label(egui::RichText::new("该文献暂无摘要。").color(theme::MUTED));
         return;
     }
+    let original_gap = ui.spacing().item_spacing.x;
+    ui.spacing_mut().item_spacing.x = ABSTRACT_COLUMN_GAP;
     ui.columns(2, |columns| {
         columns[0].label(theme::section_label("English Original"));
         columns[0].add_space(4.0);
@@ -113,7 +119,7 @@ fn render_parallel_abstract(
             .auto_shrink([false, false])
             .max_height(520.0)
             .show(&mut columns[0], |ui| {
-                render_highlighted(ui, &article.abstract_text, &app.persisted.keywords);
+                render_highlighted(ui, &article.abstract_text, &app.persisted.keywords, None);
             });
 
         columns[1].label(theme::section_label("中文翻译"));
@@ -122,43 +128,51 @@ fn render_parallel_abstract(
             .id_salt("chinese_abstract_scroll")
             .auto_shrink([false, false])
             .max_height(520.0)
-            .show(&mut columns[1], |ui| match translation.as_ref() {
-                Some(record) if record.loading => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(
-                            egui::RichText::new("正在调用联网翻译服务...").color(theme::MUTED),
-                        );
-                    });
-                }
-                Some(record) if record.text.is_some() => {
-                    let mut highlight_terms = record.translated_keywords.clone();
+            .show(&mut columns[1], |ui| {
+                if let Some(text) = article
+                    .translated_abstract
+                    .as_deref()
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    let mut highlight_terms = article.translated_keywords.clone();
                     if highlight_terms.is_empty() {
                         highlight_terms = app.persisted.keywords.clone();
                     }
-                    render_highlighted(
-                        ui,
-                        record.text.as_deref().unwrap_or_default(),
-                        &highlight_terms,
-                    );
+                    render_highlighted(ui, text, &highlight_terms, Some(CHINESE_LINE_HEIGHT));
+                    return;
                 }
-                Some(record) if record.error.is_some() => {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "翻译失败：{}",
-                            record.error.as_deref().unwrap_or("未知错误")
-                        ))
-                        .color(theme::DANGER),
-                    );
-                    if ui.button("重试翻译").clicked() {
-                        app.retry_translation(article);
+
+                match translation.as_ref() {
+                    Some(record) if record.loading => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                egui::RichText::new(
+                                    "正在调用联网翻译服务，完成后会保存到服务端...",
+                                )
+                                .color(theme::MUTED),
+                            );
+                        });
                     }
-                }
-                _ => {
-                    ui.label(egui::RichText::new("等待翻译任务...").color(theme::MUTED));
+                    Some(record) if record.error.is_some() => {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "翻译失败：{}",
+                                record.error.as_deref().unwrap_or("未知错误")
+                            ))
+                            .color(theme::DANGER),
+                        );
+                        if ui.button("重试翻译").clicked() {
+                            app.retry_translation(article);
+                        }
+                    }
+                    _ => {
+                        ui.label(egui::RichText::new("等待后台翻译任务...").color(theme::MUTED));
+                    }
                 }
             });
     });
+    ui.spacing_mut().item_spacing.x = original_gap;
 }
 
 fn filtered_navigation(
@@ -390,23 +404,53 @@ fn render_notes_panel(app: &mut RayviewApp, article: &shared::Article, ui: &mut 
     });
 }
 
-fn render_highlighted(ui: &mut egui::Ui, text: &str, keywords: &[String]) {
+fn render_highlighted(
+    ui: &mut egui::Ui,
+    text: &str,
+    keywords: &[String],
+    line_height: Option<f32>,
+) {
     let wrap_width = ui.available_width().max(240.0);
     ui.set_min_width(wrap_width);
     if keywords.is_empty() {
-        ui.add(egui::Label::new(egui::RichText::new(text).size(19.0).color(theme::TEXT)).wrap());
+        if let Some(line_height) = line_height {
+            let mut job = egui::text::LayoutJob::default();
+            job.wrap.max_width = wrap_width;
+            job.append(
+                text,
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::proportional(ABSTRACT_FONT_SIZE),
+                    line_height: Some(line_height),
+                    color: theme::TEXT,
+                    ..Default::default()
+                },
+            );
+            ui.add(egui::Label::new(job).wrap());
+        } else {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(text)
+                        .size(ABSTRACT_FONT_SIZE)
+                        .color(theme::TEXT),
+                )
+                .wrap(),
+            );
+        }
         return;
     }
     let segments = split_with_keywords(text, keywords);
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = wrap_width;
     let normal = egui::TextFormat {
-        font_id: egui::FontId::proportional(19.0),
+        font_id: egui::FontId::proportional(ABSTRACT_FONT_SIZE),
+        line_height,
         color: theme::TEXT,
         ..Default::default()
     };
     let highlight = egui::TextFormat {
-        font_id: egui::FontId::proportional(19.0),
+        font_id: egui::FontId::proportional(ABSTRACT_FONT_SIZE),
+        line_height,
         color: theme::HIGHLIGHT_FG,
         ..Default::default()
     };

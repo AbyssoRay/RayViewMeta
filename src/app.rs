@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -20,6 +20,7 @@ const FONT_REGULAR_FILE: &str = "NotoSerifCJKsc-Regular.otf";
 const FONT_BOLD_FILE: &str = "NotoSerifCJKsc-Bold.otf";
 const FONT_REGULAR_URL: &str = "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf";
 const FONT_BOLD_URL: &str = "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Bold.otf";
+const MAX_CONCURRENT_TRANSLATIONS: usize = 4;
 
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
@@ -63,8 +64,6 @@ fn default_project_id() -> String {
 #[derive(Clone, Default)]
 pub struct TranslationState {
     pub loading: bool,
-    pub text: Option<String>,
-    pub translated_keywords: Vec<String>,
     pub error: Option<String>,
 }
 
@@ -135,6 +134,8 @@ pub struct RayviewApp {
     // 图片 / 翻译缓存
     pub logo_texture: Option<egui::TextureHandle>,
     pub translations: BTreeMap<String, TranslationState>,
+    pub translation_queue: VecDeque<String>,
+    pub translation_inflight: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -218,6 +219,8 @@ impl RayviewApp {
             draft_notes_for_article: String::new(),
             logo_texture,
             translations: BTreeMap::new(),
+            translation_queue: VecDeque::new(),
+            translation_inflight: BTreeSet::new(),
         };
         if !fonts_ready {
             app.spawn_font_download(font_cache_status);
@@ -308,7 +311,7 @@ impl RayviewApp {
         self.api.set_project_id(project_id);
         self.selected_id = None;
         self.view = View::Library;
-        self.translations.clear();
+        self.clear_translation_work();
         self.clear_filters();
         self.project_rename_project_id = None;
         self.refresh();
@@ -367,35 +370,127 @@ impl RayviewApp {
     }
 
     pub fn ensure_translation_for_article(&mut self, article: &Article) {
-        if article.abstract_text.trim().is_empty() {
-            return;
-        }
-        if self
-            .translations
-            .get(&article.id)
-            .is_some_and(|record| record.loading || record.text.is_some() || record.error.is_some())
-        {
-            return;
-        }
-        self.translations.insert(
-            article.id.clone(),
-            TranslationState {
-                loading: true,
-                ..Default::default()
-            },
-        );
-        let article_id = article.id.clone();
-        let abstract_text = article.abstract_text.clone();
-        let keywords = self.persisted.keywords.clone();
-        self.bus.spawn(move |tx| {
-            let result = crate::translation::translate_abstract(&abstract_text, &keywords);
-            let _ = tx.send(TaskMsg::Translated { article_id, result });
-        });
+        self.queue_translation_for_article(article, true, false);
+        self.pump_translation_queue();
     }
 
     pub fn retry_translation(&mut self, article: &Article) {
         self.translations.remove(&article.id);
-        self.ensure_translation_for_article(article);
+        self.queue_translation_for_article(article, true, true);
+        self.pump_translation_queue();
+    }
+
+    fn clear_translation_work(&mut self) {
+        self.translations.clear();
+        self.translation_queue.clear();
+        self.translation_inflight.clear();
+    }
+
+    fn schedule_untranslated_articles(&mut self) -> usize {
+        let articles = self.articles.clone();
+        let mut queued = 0usize;
+        for article in &articles {
+            if self.queue_translation_for_article(article, false, false) {
+                queued += 1;
+            }
+        }
+        self.pump_translation_queue();
+        queued
+    }
+
+    fn queue_translation_for_article(
+        &mut self,
+        article: &Article,
+        priority: bool,
+        force: bool,
+    ) -> bool {
+        if !article_needs_translation(article) {
+            return false;
+        }
+        if self.translation_inflight.contains(&article.id) {
+            return false;
+        }
+        if self
+            .translations
+            .get(&article.id)
+            .is_some_and(|record| record.error.is_some() && !force)
+        {
+            return false;
+        }
+        if let Some(position) = self
+            .translation_queue
+            .iter()
+            .position(|queued_id| queued_id == &article.id)
+        {
+            if priority {
+                if let Some(id) = self.translation_queue.remove(position) {
+                    self.translation_queue.push_front(id);
+                }
+            }
+            return false;
+        }
+        self.translations.entry(article.id.clone()).or_default();
+        if priority {
+            self.translation_queue.push_front(article.id.clone());
+        } else {
+            self.translation_queue.push_back(article.id.clone());
+        }
+        true
+    }
+
+    fn pump_translation_queue(&mut self) {
+        while self.translation_inflight.len() < MAX_CONCURRENT_TRANSLATIONS {
+            let Some(article_id) = self.translation_queue.pop_front() else {
+                break;
+            };
+            if self.translation_inflight.contains(&article_id) {
+                continue;
+            }
+            let Some(article) = self
+                .articles
+                .iter()
+                .find(|article| article.id == article_id)
+                .cloned()
+            else {
+                self.translations.remove(&article_id);
+                continue;
+            };
+            if !article_needs_translation(&article) {
+                self.translations.remove(&article_id);
+                continue;
+            }
+            self.translation_inflight.insert(article_id.clone());
+            self.translations.insert(
+                article_id.clone(),
+                TranslationState {
+                    loading: true,
+                    error: None,
+                },
+            );
+            let api = self.api.clone();
+            let project_id = self.persisted.selected_project_id.clone();
+            let keywords = self.persisted.keywords.clone();
+            self.bus.spawn(move |tx| {
+                let result = translate_and_store(&api, &article, &keywords);
+                let _ = tx.send(TaskMsg::TranslationStored {
+                    project_id,
+                    article_id,
+                    result,
+                });
+            });
+        }
+    }
+
+    fn upsert_article(&mut self, article: Article) {
+        if let Some(slot) = self
+            .articles
+            .iter_mut()
+            .find(|existing| existing.id == article.id)
+        {
+            *slot = article;
+        } else {
+            self.articles.push(article);
+        }
     }
 
     pub fn save_persistent(&self, storage: &mut dyn eframe::Storage) {
@@ -504,7 +599,7 @@ impl RayviewApp {
                             self.projects.push(project);
                             self.selected_id = None;
                             self.articles.clear();
-                            self.translations.clear();
+                            self.clear_translation_work();
                             self.clear_filters();
                             self.set_status("项目已创建");
                             self.refresh_projects();
@@ -550,7 +645,7 @@ impl RayviewApp {
                             self.project_rename_project_id = None;
                             self.selected_id = None;
                             self.articles.clear();
-                            self.translations.clear();
+                            self.clear_translation_work();
                             self.clear_filters();
                             self.set_status("项目已删除");
                             self.refresh_projects();
@@ -564,7 +659,14 @@ impl RayviewApp {
                         Ok(list) => {
                             let cnt = list.len();
                             self.articles = list;
-                            self.set_status(format!("已加载 {} 篇文献", cnt));
+                            let queued = self.schedule_untranslated_articles();
+                            if queued == 0 {
+                                self.set_status(format!("已加载 {} 篇文献", cnt));
+                            } else {
+                                self.set_status(format!(
+                                    "已加载 {cnt} 篇文献，正在后台翻译 {queued} 篇"
+                                ));
+                            }
                         }
                         Err(e) => self.set_status(format!("加载失败: {e}")),
                     }
@@ -574,6 +676,11 @@ impl RayviewApp {
                     self.import_progress = None;
                     match r {
                         Ok(added) => {
+                            for article in &added {
+                                self.upsert_article(article.clone());
+                                self.queue_translation_for_article(article, false, false);
+                            }
+                            self.pump_translation_queue();
                             self.set_status(format!("已导入 {} 篇", added.len()));
                             self.refresh_projects();
                         }
@@ -597,13 +704,9 @@ impl RayviewApp {
                     match result {
                         Ok(article) => {
                             let article = *article;
-                            if !self
-                                .articles
-                                .iter()
-                                .any(|existing| existing.id == article.id)
-                            {
-                                self.articles.push(article.clone());
-                            }
+                            self.upsert_article(article.clone());
+                            self.queue_translation_for_article(&article, false, false);
+                            self.pump_translation_queue();
                             self.set_status(format!("已导入：{}", article.title));
                         }
                         Err(error) => self.set_status(format!("单篇导入失败: {error}")),
@@ -637,35 +740,51 @@ impl RayviewApp {
                     self.set_failure_report("导入失败明细", items);
                     self.set_status(format!("{count} 条文献未成功导入，已列出原因"));
                 }
-                TaskMsg::Translated { article_id, result } => {
-                    let record = self.translations.entry(article_id).or_default();
+                TaskMsg::TranslationStored {
+                    project_id,
+                    article_id,
+                    result,
+                } => {
+                    if project_id != self.persisted.selected_project_id {
+                        continue;
+                    }
+                    self.translation_inflight.remove(&article_id);
+                    let record = self.translations.entry(article_id.clone()).or_default();
                     record.loading = false;
+                    let mut translation_failed = false;
                     match result {
-                        Ok(translated) => {
-                            record.text = Some(translated.text);
-                            record.translated_keywords = translated.translated_keywords;
+                        Ok(UpdateOutcome::Applied(article))
+                        | Ok(UpdateOutcome::Conflict(article)) => {
+                            let article = *article;
                             record.error = None;
+                            self.upsert_article(article);
                         }
                         Err(error) => {
+                            translation_failed = true;
                             record.error = Some(error.to_string());
-                            record.text = None;
-                            record.translated_keywords.clear();
+                            self.set_status(format!("翻译失败: {error}"));
+                        }
+                    }
+                    self.pump_translation_queue();
+                    if !translation_failed {
+                        let remaining =
+                            self.translation_inflight.len() + self.translation_queue.len();
+                        if remaining == 0 {
+                            self.set_status("后台翻译已完成");
+                        } else {
+                            self.set_status(format!("后台翻译中，剩余 {remaining} 篇"));
                         }
                     }
                 }
                 TaskMsg::Updated(r) => match r {
                     Ok(UpdateOutcome::Applied(article)) => {
                         let article = *article;
-                        if let Some(slot) = self.articles.iter_mut().find(|x| x.id == article.id) {
-                            *slot = article;
-                        }
+                        self.upsert_article(article);
                         self.set_status("已保存");
                     }
                     Ok(UpdateOutcome::Conflict(article)) => {
                         let article = *article;
-                        if let Some(slot) = self.articles.iter_mut().find(|x| x.id == article.id) {
-                            *slot = article;
-                        }
+                        self.upsert_article(article);
                         self.draft_notes_article_id = None;
                         self.set_status("编辑冲突：该字段已被其他客户端修改，已同步服务器当前版本");
                     }
@@ -674,6 +793,9 @@ impl RayviewApp {
                 TaskMsg::Deleted(r) => match r {
                     Ok(id) => {
                         self.articles.retain(|a| a.id != id);
+                        self.translations.remove(&id);
+                        self.translation_queue.retain(|queued_id| queued_id != &id);
+                        self.translation_inflight.remove(&id);
                         if self.selected_id.as_deref() == Some(&id) {
                             self.selected_id = None;
                             self.view = View::Library;
@@ -762,6 +884,12 @@ impl RayviewApp {
         let deleted_count = report.deleted_ids.len();
         self.articles
             .retain(|article| !report.deleted_ids.iter().any(|id| id == &article.id));
+        for id in &report.deleted_ids {
+            self.translations.remove(id);
+            self.translation_inflight.remove(id);
+        }
+        self.translation_queue
+            .retain(|queued_id| !report.deleted_ids.iter().any(|id| id == queued_id));
         if self
             .selected_id
             .as_ref()
@@ -853,6 +981,31 @@ impl eframe::App for RayviewApp {
 
         ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
+}
+
+fn article_needs_translation(article: &Article) -> bool {
+    !article.abstract_text.trim().is_empty()
+        && article
+            .translated_abstract
+            .as_deref()
+            .is_none_or(|text| text.trim().is_empty())
+}
+
+fn translate_and_store(
+    api: &ApiClient,
+    article: &Article,
+    keywords: &[String],
+) -> anyhow::Result<UpdateOutcome> {
+    let translated = crate::translation::translate_abstract(&article.abstract_text, keywords)?;
+    api.update(
+        &article.id,
+        &ArticleUpdate {
+            expected_version: Some(article.version),
+            translated_abstract: Some(translated.text),
+            translated_keywords: Some(translated.translated_keywords),
+            ..Default::default()
+        },
+    )
 }
 
 fn show_startup_loading(root_ui: &mut egui::Ui) {

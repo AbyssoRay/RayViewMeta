@@ -11,6 +11,7 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
         )
         .show_inside(root_ui, |ui| {
             ui.horizontal(|ui| {
+                let busy = app.loading || !app.translation_inflight.is_empty();
                 ui.label(egui::RichText::new("Status").small().color(theme::ACCENT));
                 if let Some(progress) = &app.import_progress {
                     let fraction = if progress.total == 0 {
@@ -26,6 +27,9 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
                     .on_hover_text(&progress.item);
                 }
                 ui.label(egui::RichText::new(&app.status).small().color(theme::TEXT));
+                if busy {
+                    ui.spinner();
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("Endpoint {}", app.api.base_url()))

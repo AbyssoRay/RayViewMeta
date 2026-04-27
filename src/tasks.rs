@@ -2,7 +2,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
 use crate::api::UpdateOutcome;
-use crate::translation::TranslatedAbstract;
 use shared::Article;
 use shared::Project;
 
@@ -67,9 +66,10 @@ pub enum TaskMsg {
         failures: Vec<FailureReport>,
     },
     ImportFailures(Vec<FailureReport>),
-    Translated {
+    TranslationStored {
+        project_id: String,
         article_id: String,
-        result: anyhow::Result<TranslatedAbstract>,
+        result: anyhow::Result<UpdateOutcome>,
     },
     Updated(anyhow::Result<UpdateOutcome>),
     Deleted(anyhow::Result<String>),

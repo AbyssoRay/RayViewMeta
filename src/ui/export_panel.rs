@@ -390,6 +390,8 @@ mod tests {
             exclusion_reason: String::new(),
             decision,
             notes: String::new(),
+            translated_abstract: None,
+            translated_keywords: Vec::new(),
             created_at: 0,
             updated_at: 0,
             version: 0,

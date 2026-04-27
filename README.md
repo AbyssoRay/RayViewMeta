@@ -12,7 +12,7 @@ Set a different server URL in the client settings page or with `RAYVIEW_SERVER_U
 
 ## Features
 
-- Project management from the top bar: create, select, rename, and delete independent literature libraries.
+- Project management from the Settings page: create, select, rename, and delete independent literature libraries.
 - PDF ingestion that extracts DOI values from the PDF text layer and resolves journal-page metadata through DOI links.
 - Batch import from PMID values, PubMed URLs, DOI values, doi.org links, and publisher article pages.
 - Manual record creation.
@@ -20,9 +20,10 @@ Set a different server URL in the client settings page or with `RAYVIEW_SERVER_U
 - Rayyan-style screening decisions: undecided, include, exclude, and maybe.
 - Tags, starred records, exclusion reasons, notes, and keyword highlighting.
 - Publication keywords are imported when publisher pages, PubMed, or Crossref expose them.
-- Detail view with side-by-side English abstract and Chinese translation.
-- Network translation through the free MyMemory translation API; no in-repo translation model is shipped.
-- Field-level optimistic concurrency for multi-user editing.
+- Detail view with side-by-side English abstract and persisted Chinese translation.
+- Background translation starts after import and on startup for untranslated records; opening a detail page moves that article to the front of the translation queue.
+- Network translation through the free MyMemory translation API; translated abstract text and translated highlight terms are saved back to the server.
+- Field-level optimistic concurrency for multi-user editing, including a separate translation field version so automated translation does not collide with notes, tags, or screening decisions.
 - Export of included records to real `.xlsx` files with title, DOI, and copy-ready reference text.
 - Single-file Windows GUI client build with no console window.
 
@@ -73,6 +74,8 @@ Pop-Location
 
 The data file is JSON. Older single-library data files stored as `Vec<Article>` are migrated in memory into the default project and are written back in the new project-based format on the next change.
 
+The server does not currently need a separate database. Rayview Meta runs as a single Axum service with one project-scoped JSON store guarded by the server process; article records, screening fields, and persisted translations are small enough for this model, and writes are serialized through the store before being atomically rewritten to disk. Move to SQLite or PostgreSQL only when you need multi-process writers, large multi-team datasets, audit trails, or advanced querying.
+
 ## Run The Client
 
 ```powershell
@@ -86,7 +89,7 @@ $env:RAYVIEW_SERVER_URL = "http://127.0.0.1:9631"
 cargo run --release
 ```
 
-You can also change the endpoint inside the Settings view. After changing the server URL, the client reloads projects first and then loads the selected project library.
+You can also change the endpoint inside the Settings page. After changing the server URL, the client reloads projects first and then loads the selected project library.
 
 ## Import Sources
 
@@ -181,18 +184,19 @@ Project endpoints:
 ```text
 GET    /api/projects
 POST   /api/projects
-DELETE /api/projects/:project_id
+PATCH  /api/projects/{project_id}
+DELETE /api/projects/{project_id}
 ```
 
 Project-scoped article endpoints:
 
 ```text
-GET    /api/projects/:project_id/articles
-POST   /api/projects/:project_id/articles
-POST   /api/projects/:project_id/articles/bulk
-GET    /api/projects/:project_id/articles/:id
-PATCH  /api/projects/:project_id/articles/:id
-DELETE /api/projects/:project_id/articles/:id
+GET    /api/projects/{project_id}/articles
+POST   /api/projects/{project_id}/articles
+POST   /api/projects/{project_id}/articles/bulk
+GET    /api/projects/{project_id}/articles/{id}
+PATCH  /api/projects/{project_id}/articles/{id}
+DELETE /api/projects/{project_id}/articles/{id}
 ```
 
 Compatibility endpoints still target the default project:
@@ -214,7 +218,7 @@ GET /api/health
 
 ## Concurrency Model
 
-Each article has an overall version plus per-field versions for tags, starred state, exclusion reason, decision, and notes. Updates include the version the client last saw. The server accepts non-overlapping field edits from different clients and returns a conflict only when the same field changed after the client's expected version.
+Each article has an overall version plus per-field versions for tags, starred state, exclusion reason, decision, notes, and translation. Updates include the version the client last saw. The server accepts non-overlapping field edits from different clients and returns a conflict only when the same field changed after the client's expected version.
 
 ## Duplicate Handling
 
@@ -227,7 +231,11 @@ The client imports records one by one so a duplicate no longer blocks unrelated 
 
 ## Translation
 
-The detail view automatically starts a network translation task for the selected article abstract. The English source text remains the source of keyword detection. Highlight terms are also translated and applied to the Chinese column when the translation service returns usable keyword translations.
+The client keeps translation work off the UI thread. After a successful import, the article is queued for translation immediately. On startup and after library refresh, untranslated articles are queued automatically. The queue runs with a bounded concurrency of four translation workers, which keeps throughput high without flooding the public endpoint. If the user opens an untranslated article in the detail view, that article is moved to the front of the queue.
+
+Translation results are saved to the server through the normal article `PATCH` endpoint as `translated_abstract` and `translated_keywords`. Other clients and later app launches read those fields directly, so completed translations are not requested again. Deleting an article deletes its persisted translation because the translation lives inside the article record.
+
+The detail view displays the English source text on the left and the stored Chinese translation on the right. The English source text remains the source of keyword detection. Highlight terms are also translated and applied to the Chinese column when the translation service returns usable keyword translations.
 
 The translation integration uses MyMemory's public API:
 
