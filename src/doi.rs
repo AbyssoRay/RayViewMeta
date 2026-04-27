@@ -60,6 +60,30 @@ pub fn fetch_article_from_input(input: &str, source: ArticleSource) -> Result<Ne
 
 pub fn fetch_article_from_doi(doi: &str, source: ArticleSource) -> Result<NewArticle> {
     let doi = clean_doi(doi).ok_or_else(|| anyhow!("无法识别 DOI"))?;
+    let metadata = fetch_metadata_from_clean_doi(&doi)?;
+    metadata_to_article(metadata, source, &format!("DOI {doi}"))
+}
+
+pub fn fetch_article_from_doi_with_fallback(
+    doi: &str,
+    source: ArticleSource,
+    fallback: NewArticle,
+) -> Result<NewArticle> {
+    let doi = clean_doi(doi).ok_or_else(|| anyhow!("无法识别 DOI"))?;
+    let fallback_metadata = article_to_metadata(fallback, &doi);
+    match fetch_metadata_from_clean_doi(&doi) {
+        Ok(mut metadata) => {
+            merge_missing(&mut metadata, fallback_metadata.clone());
+            metadata_to_article(metadata, source, &format!("DOI {doi}")).or_else(|_| {
+                metadata_to_article(fallback_metadata, source, &format!("PDF DOI {doi}"))
+            })
+        }
+        Err(error) => metadata_to_article(fallback_metadata, source, &format!("PDF DOI {doi}"))
+            .with_context(|| format!("无法通过 DOI 访问期刊网页: {doi}: {error}")),
+    }
+}
+
+fn fetch_metadata_from_clean_doi(doi: &str) -> Result<ArticleMetadata> {
     let client = build_client()?;
     let url = format!("https://doi.org/{doi}");
     let html =
@@ -71,10 +95,10 @@ pub fn fetch_article_from_doi(doi: &str, source: ArticleSource) -> Result<NewArt
         }
         metadata.doi = Some(page_doi);
     } else {
-        metadata.doi = Some(doi.clone());
+        metadata.doi = Some(doi.to_string());
     }
     enrich_from_crossref(&client, &mut metadata);
-    metadata_to_article(metadata, source, &format!("DOI {doi}"))
+    Ok(metadata)
 }
 
 pub fn fetch_article_from_url(article_url: &str, source: ArticleSource) -> Result<NewArticle> {
@@ -382,6 +406,21 @@ fn metadata_to_article(
         keywords: metadata.keywords,
         source,
     })
+}
+
+fn article_to_metadata(article: NewArticle, doi: &str) -> ArticleMetadata {
+    ArticleMetadata {
+        title: Some(article.title),
+        abstract_text: Some(article.abstract_text),
+        authors: article.authors,
+        journal: article.journal,
+        year: article.year,
+        doi: article
+            .doi
+            .and_then(|value| clean_doi(&value))
+            .or_else(|| Some(doi.to_string())),
+        keywords: article.keywords,
+    }
 }
 
 fn parse_http_url(input: &str) -> Option<String> {

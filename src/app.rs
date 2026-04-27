@@ -64,6 +64,7 @@ pub enum View {
     Library,
     Upload,
     Export,
+    ProjectManagement,
     Settings,
     Detail,
 }
@@ -97,6 +98,7 @@ pub struct RayviewApp {
     pub project_rename_name: String,
     pub project_rename_project_id: Option<String>,
     pub confirm_delete_project: String,
+    pub last_project_management_sync_at: Option<Instant>,
 
     // 导入失败 / 批量操作结果弹窗
     pub failure_report_title: String,
@@ -170,6 +172,7 @@ impl RayviewApp {
             project_rename_name: String::new(),
             project_rename_project_id: None,
             confirm_delete_project: String::new(),
+            last_project_management_sync_at: None,
             failure_report_title: String::new(),
             failure_report_items: Vec::new(),
             show_failure_report: false,
@@ -458,6 +461,7 @@ impl RayviewApp {
                                 self.project_rename_project_id = Some(project.id);
                             }
                             self.set_status("文献库已重命名");
+                            self.refresh_projects();
                         }
                         Err(error) => self.set_status(format!("重命名文献库失败: {error}")),
                     }
@@ -702,6 +706,7 @@ impl eframe::App for RayviewApp {
             View::Library => ui::library::show(self, root_ui),
             View::Upload => ui::upload::show(self, root_ui),
             View::Export => ui::export_panel::show(self, root_ui),
+            View::ProjectManagement => ui::project_management::show(self, root_ui),
             View::Settings => ui::settings::show(self, root_ui),
             View::Detail => ui::detail::show(self, root_ui),
         }

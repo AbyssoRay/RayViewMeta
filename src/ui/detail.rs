@@ -82,9 +82,6 @@ pub fn show(app: &mut RayviewApp, root_ui: &mut egui::Ui) {
                                 ui.add_space(14.0);
                                 ui.separator();
                                 render_notes_panel(app, &article, ui);
-                                ui.add_space(14.0);
-                                ui.separator();
-                                render_keywords_panel(app, ui);
                             });
                         });
                 });
@@ -186,7 +183,9 @@ fn filtered_navigation(
 }
 
 fn render_metadata(ui: &mut egui::Ui, article: &shared::Article) {
+    let width = ui.available_width();
     theme::panel_frame().show(ui, |ui| {
+        ui.set_min_width((width - 32.0).max(320.0));
         ui.label(theme::section_label("Bibliographic Metadata"));
         metadata_row(ui, "作者", |ui| {
             if article.authors.is_empty() {
@@ -389,35 +388,6 @@ fn render_notes_panel(app: &mut RayviewApp, article: &shared::Article, ui: &mut 
             app.draft_notes_for_article = article.notes.clone();
         }
     });
-}
-
-fn render_keywords_panel(app: &mut RayviewApp, ui: &mut egui::Ui) {
-    ui.label(theme::section_label("Highlight Terms"));
-    ui.horizontal(|ui| {
-        ui.text_edit_singleline(&mut app.new_keyword);
-        if ui.button("添加").clicked() {
-            let keyword = app.new_keyword.trim().to_string();
-            if !keyword.is_empty() && !app.persisted.keywords.contains(&keyword) {
-                app.persisted.keywords.push(keyword);
-                app.new_keyword.clear();
-            }
-        }
-    });
-    let keywords = app.persisted.keywords.clone();
-    let mut to_remove: Option<usize> = None;
-    ui.horizontal_wrapped(|ui| {
-        for (index, keyword) in keywords.iter().enumerate() {
-            if theme::removable_chip_button(ui, keyword)
-                .on_hover_text("单击删除关键词")
-                .clicked()
-            {
-                to_remove = Some(index);
-            }
-        }
-    });
-    if let Some(index) = to_remove {
-        app.persisted.keywords.remove(index);
-    }
 }
 
 fn render_highlighted(ui: &mut egui::Ui, text: &str, keywords: &[String]) {

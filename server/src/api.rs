@@ -12,26 +12,26 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/health", get(health))
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
-            "/api/projects/:project_id",
+            "/api/projects/{project_id}",
             delete(delete_project).patch(rename_project),
         )
         .route(
-            "/api/projects/:project_id/articles",
+            "/api/projects/{project_id}/articles",
             get(list_project_articles).post(create_project_article),
         )
         .route(
-            "/api/projects/:project_id/articles/bulk",
+            "/api/projects/{project_id}/articles/bulk",
             post(bulk_create_project_articles),
         )
         .route(
-            "/api/projects/:project_id/articles/:id",
+            "/api/projects/{project_id}/articles/{id}",
             get(get_project_article)
                 .patch(update_project_article)
                 .delete(delete_project_article),
         )
         .route("/api/articles", get(list_articles).post(create_article))
         .route(
-            "/api/articles/:id",
+            "/api/articles/{id}",
             get(get_article)
                 .patch(update_article)
                 .delete(delete_article),
@@ -267,5 +267,33 @@ pub struct StatusCodeWrap(pub axum::http::StatusCode);
 impl axum::response::IntoResponse for StatusCodeWrap {
     fn into_response(self) -> axum::response::Response {
         self.0.into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::state::AppState;
+    use crate::store::Store;
+
+    use super::*;
+
+    #[test]
+    fn router_builds_with_axum_current_path_syntax() {
+        let path = std::env::temp_dir().join(format!(
+            "rayview_router_test_{}.json",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = Store::load_or_create(&path).unwrap();
+        let state = Arc::new(AppState::new(store));
+
+        let _router = router(state);
+
+        let _ = std::fs::remove_file(path);
     }
 }
