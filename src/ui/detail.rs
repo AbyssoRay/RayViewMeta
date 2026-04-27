@@ -167,7 +167,7 @@ fn render_parallel_abstract(
                         }
                     }
                     _ => {
-                        ui.label(egui::RichText::new("等待后台翻译任务...").color(theme::MUTED));
+                        ui.label(egui::RichText::new("等待翻译任务...").color(theme::MUTED));
                     }
                 }
             });

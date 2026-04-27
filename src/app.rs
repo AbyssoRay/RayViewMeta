@@ -20,7 +20,7 @@ const FONT_REGULAR_FILE: &str = "NotoSerifCJKsc-Regular.otf";
 const FONT_BOLD_FILE: &str = "NotoSerifCJKsc-Bold.otf";
 const FONT_REGULAR_URL: &str = "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Regular.otf";
 const FONT_BOLD_URL: &str = "https://github.com/notofonts/noto-cjk/raw/main/Serif/OTF/SimplifiedChinese/NotoSerifCJKsc-Bold.otf";
-const MAX_CONCURRENT_TRANSLATIONS: usize = 4;
+const MAX_CONCURRENT_TRANSLATIONS: usize = 2;
 
 #[derive(Serialize, Deserialize)]
 pub struct PersistedState {
@@ -386,18 +386,6 @@ impl RayviewApp {
         self.translation_inflight.clear();
     }
 
-    fn schedule_untranslated_articles(&mut self) -> usize {
-        let articles = self.articles.clone();
-        let mut queued = 0usize;
-        for article in &articles {
-            if self.queue_translation_for_article(article, false, false) {
-                queued += 1;
-            }
-        }
-        self.pump_translation_queue();
-        queued
-    }
-
     fn queue_translation_for_article(
         &mut self,
         article: &Article,
@@ -659,14 +647,7 @@ impl RayviewApp {
                         Ok(list) => {
                             let cnt = list.len();
                             self.articles = list;
-                            let queued = self.schedule_untranslated_articles();
-                            if queued == 0 {
-                                self.set_status(format!("已加载 {} 篇文献", cnt));
-                            } else {
-                                self.set_status(format!(
-                                    "已加载 {cnt} 篇文献，正在后台翻译 {queued} 篇"
-                                ));
-                            }
+                            self.set_status(format!("已加载 {} 篇文献", cnt));
                         }
                         Err(e) => self.set_status(format!("加载失败: {e}")),
                     }
@@ -678,9 +659,7 @@ impl RayviewApp {
                         Ok(added) => {
                             for article in &added {
                                 self.upsert_article(article.clone());
-                                self.queue_translation_for_article(article, false, false);
                             }
-                            self.pump_translation_queue();
                             self.set_status(format!("已导入 {} 篇", added.len()));
                             self.refresh_projects();
                         }
@@ -705,8 +684,6 @@ impl RayviewApp {
                         Ok(article) => {
                             let article = *article;
                             self.upsert_article(article.clone());
-                            self.queue_translation_for_article(&article, false, false);
-                            self.pump_translation_queue();
                             self.set_status(format!("已导入：{}", article.title));
                         }
                         Err(error) => self.set_status(format!("单篇导入失败: {error}")),
@@ -770,9 +747,9 @@ impl RayviewApp {
                         let remaining =
                             self.translation_inflight.len() + self.translation_queue.len();
                         if remaining == 0 {
-                            self.set_status("后台翻译已完成");
+                            self.set_status("译文已保存到服务端");
                         } else {
-                            self.set_status(format!("后台翻译中，剩余 {remaining} 篇"));
+                            self.set_status(format!("翻译队列中，剩余 {remaining} 篇"));
                         }
                     }
                 }

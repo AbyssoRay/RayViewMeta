@@ -231,19 +231,41 @@ The client imports records one by one so a duplicate no longer blocks unrelated 
 
 ## Translation
 
-The client keeps translation work off the UI thread. After a successful import, the article is queued for translation immediately. On startup and after library refresh, untranslated articles are queued automatically. The queue runs with a bounded concurrency of four translation workers, which keeps throughput high without flooding the public endpoint. If the user opens an untranslated article in the detail view, that article is moved to the front of the queue.
+The client keeps translation work off the UI thread. Translation is intentionally on-demand: an untranslated article is translated when the user opens its detail view. The queue runs with a bounded concurrency of two translation workers, and translation requests pass through a shared throttle with automatic HTTP 429 backoff. This keeps requests inside public endpoint rate limits without translating the whole library in the background.
 
 Translation results are saved to the server through the normal article `PATCH` endpoint as `translated_abstract` and `translated_keywords`. Other clients and later app launches read those fields directly, so completed translations are not requested again. Deleting an article deletes its persisted translation because the translation lives inside the article record.
 
-The detail view displays the English source text on the left and the stored Chinese translation on the right. The English source text remains the source of keyword detection. Highlight terms are also translated and applied to the Chinese column when the translation service returns usable keyword translations.
+The detail view displays the English source text on the left and the stored Chinese translation on the right. If the article already has a saved translation, the client shows it immediately and does not request translation again. The English source text remains the source of keyword detection. Highlight terms are also translated and applied to the Chinese column when the translation service returns usable keyword translations.
 
-The translation integration uses MyMemory's public API:
+The default translation backend uses a no-key Google Translate web endpoint:
 
 ```text
-https://api.mymemory.translated.net/get
+https://translate.googleapis.com/translate_a/single
 ```
 
-Production users should review the service's usage limits and privacy terms before sending sensitive text.
+Alternative backends are selected with environment variables before launching the client:
+
+```powershell
+# Default; no key required.
+$env:RAYVIEW_TRANSLATION_PROVIDER = "google"
+
+# MyMemory; no key required, but currently more prone to HTTP 429.
+$env:RAYVIEW_TRANSLATION_PROVIDER = "mymemory"
+
+# LibreTranslate-compatible endpoint.
+$env:RAYVIEW_TRANSLATION_PROVIDER = "libretranslate"
+$env:RAYVIEW_LIBRETRANSLATE_URL = "https://libretranslate.com/translate"
+$env:RAYVIEW_LIBRETRANSLATE_API_KEY = "optional-key"
+
+# OpenAI-compatible chat/completions endpoint, including free-tier providers
+# such as OpenRouter or other compatible gateways when you provide their key/model.
+$env:RAYVIEW_TRANSLATION_PROVIDER = "openai"
+$env:RAYVIEW_LLM_BASE_URL = "https://openrouter.ai/api/v1"
+$env:RAYVIEW_LLM_API_KEY = "your-key"
+$env:RAYVIEW_LLM_MODEL = "provider/model-name"
+```
+
+The OpenAI-compatible backend sends one structured request per article and asks the model to return JSON containing `translated_text` and `translated_keywords`. Do not commit API keys or provider-specific private URLs. Production users should review each service's usage limits and privacy terms before sending sensitive text.
 
 ## Development Checks
 
