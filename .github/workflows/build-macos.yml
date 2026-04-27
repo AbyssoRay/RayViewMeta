@@ -1,0 +1,84 @@
+name: Build macOS Client
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "shared/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/build-macos.sh"
+      - ".github/workflows/build-macos.yml"
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: "Target architecture"
+        required: true
+        default: "aarch64"
+        type: choice
+        options:
+          - aarch64
+          - x86_64
+          - universal
+
+jobs:
+  build:
+    name: Build (${{ github.event.inputs.arch || 'aarch64' }})
+    runs-on: macos-14
+    env:
+      ARCH: ${{ github.event.inputs.arch || 'aarch64' }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-${{ env.ARCH }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            macos-${{ env.ARCH }}-cargo-
+
+      - name: Install bundling tools
+        run: |
+          brew install create-dmg || true
+
+      - name: Build
+        run: |
+          chmod +x scripts/build-macos.sh
+          scripts/build-macos.sh "$ARCH"
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RayviewMeta-macos-${{ env.ARCH }}-app
+          path: dist/macos/RayviewMeta.app
+          if-no-files-found: error
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RayviewMeta-macos-${{ env.ARCH }}-dmg
+          path: dist/macos/*.dmg
+          if-no-files-found: warn
+
+      - name: Attach to release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/macos/*.dmg
